@@ -1,0 +1,16 @@
+{
+  "title": "How high is Mount Testa?",
+  "hook": {"narration": "Mount Testa is the highest mountain in Fictland.", "on_screen_text": "Fictland's highest peak", "visual": "title",
+           "claims": [{"text": "Mount Testa is the highest mountain in Fictland.", "source_quote": "Mount Testa is the highest mountain in Fictland, with a summit elevation of 6,412 m (21,037 ft) above sea level.", "type": "name"}]},
+  "scenes": [
+    {"narration": "Its summit rises 6,412 meters above sea level.", "on_screen_text": "6,412 meters", "visual": "big_number",
+     "claims": [{"text": "Its summit rises 6,412 meters above sea level.", "source_quote": "Mount Testa is the highest mountain in Fictland, with a summit elevation of 6,412 m (21,037 ft) above sea level.", "type": "number"}]},
+    {"narration": "Ada Brenner and Tomas Kell first climbed it in 1931.", "on_screen_text": "First ascent: 1931", "visual": "timeline",
+     "claims": [{"text": "Ada Brenner and Tomas Kell first climbed it in 1931.", "source_quote": "The mountain was first climbed on 14 July 1931 by Ada Brenner and Tomas Kell.", "type": "date"}]},
+    {"narration": "Winter nights can hit minus 45 °C. Here's the twist.", "on_screen_text": "-45 °C", "visual": "big_number",
+     "claims": [{"text": "Winter nights can hit minus 45 °C.", "source_quote": "Temperatures at the summit can fall to −45 °C in winter.", "type": "number"}]},
+    {"narration": "Its glacier shrinks by about 12 meters every year.", "on_screen_text": "Shrinking 12 m a year", "visual": "big_number",
+     "claims": [{"text": "Its glacier shrinks by about 12 meters every year.", "source_quote": "Its summit glacier covers about 38 km² and is shrinking by roughly 12 m per year.", "type": "number"}]}
+  ],
+  "outro": {"narration": "Follow for more facts.", "on_screen_text": "Follow for more", "visual": "title", "claims": []}
+}

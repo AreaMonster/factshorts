@@ -1,0 +1,32 @@
+{
+  "kind": "wikipedia",
+  "title": "Mount Testa",
+  "url": "https://en.wikipedia.org/wiki/Mount_Testa",
+  "language": "en",
+  "revision_id": 123456789,
+  "page_id": 42,
+  "wikidata_id": "Q999999",
+  "sha256": "fixture",
+  "sections": [
+    {
+      "index": 0,
+      "title": "Lead",
+      "text": "Mount Testa is the highest mountain in Fictland, with a summit elevation of 6,412 m (21,037 ft) above sea level. It lies on the border between Northia and Southia.\nThe mountain was first climbed on 14 July 1931 by Ada Brenner and Tomas Kell. Its summit glacier covers about 38 km² and is shrinking by roughly 12 m per year."
+    },
+    {
+      "index": 1,
+      "title": "Climate",
+      "text": "Temperatures at the summit can fall to −45 °C in winter. Winds above 150 km/h are common on the north face.\nThe nearby town of Velden receives about 1,200 mm of rain per year."
+    },
+    {
+      "index": 2,
+      "title": "Tourism",
+      "text": "Around 35,000 people visit the Testa National Park each year. A cable car built in 1987 carries visitors to a viewing platform at 3,100 m."
+    },
+    {
+      "index": 3,
+      "title": "Geology",
+      "text": "The mountain is made mostly of granite and gneiss that formed deep underground. Over millions of years, the rock was pushed upward as two plates collided. Small earthquakes are recorded near the summit several times a year, and scientists from the University of Velden monitor the slopes with a network of sensors. The north face is the steepest side of the mountain and was not climbed until much later."
+    }
+  ]
+}

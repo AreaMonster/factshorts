@@ -1,0 +1,213 @@
+"""Write the deliverables next to the MP4: sources.json, metadata.json, description.txt, .srt."""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+from datetime import datetime
+from pathlib import Path
+
+from factshorts import __version__
+from factshorts.core.captions import caption_chunks
+from factshorts.models import (
+    AudioPlan,
+    ExportResult,
+    Idea,
+    RenderResult,
+    Script,
+    SourceDoc,
+    Verification,
+    utcnow,
+)
+
+DISCLAIMER = (
+    "Facts were checked automatically against the cited source. Automated checks reduce "
+    "errors but cannot eliminate them; please report mistakes."
+)
+WIKIPEDIA_LICENSE = "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)"
+
+
+def slugify(text: str, max_len: int = 48) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug[:max_len].rstrip("-") or "video"
+
+
+def source_label(source: SourceDoc) -> str:
+    if source.kind == "wikipedia":
+        return f"Source: Wikipedia, “{source.title}”"
+    return f"Source: {source.title}"
+
+
+def hashtags(script: Script, source: SourceDoc, topic: str | None) -> list[str]:
+    tags = ["#facts", "#shorts", "#learnontiktok"]
+    for word in (source.title, topic or ""):
+        tag = re.sub(r"[^A-Za-z0-9]", "", word.title())
+        if tag and f"#{tag.lower()}" not in [t.lower() for t in tags]:
+            tags.append(f"#{tag}")
+    return tags
+
+
+def build_sources_json(
+    idea: Idea,
+    source: SourceDoc,
+    script: Script,
+    verification: Verification | None,
+    verified: bool,
+) -> dict:
+    claims = []
+    by_id = {c.claim_id: c for c in verification.claims} if verification else {}
+    for seg in script.segments:
+        for claim in seg.claims:
+            v = by_id.get(claim.id)
+            claims.append(
+                {
+                    "id": claim.id,
+                    "segment": seg.id,
+                    "text": claim.text,
+                    "type": claim.type,
+                    "source_quote": claim.source_quote,
+                    "paragraph": v.paragraph if v else None,
+                    "passed": v.passed if v else None,
+                    "checks": [c.model_dump() for c in v.checks] if v else [],
+                }
+            )
+    return {
+        "generator": f"factshorts {__version__}",
+        "generated_at": utcnow().isoformat(),
+        "verified": verified,
+        "label": verification.label if verification else "UNVERIFIED",
+        "checks_not_run": verification.skipped_checks if verification else [],
+        "disclaimer": DISCLAIMER,
+        "idea": idea.text,
+        "source": {
+            "kind": source.kind,
+            "title": source.title,
+            "url": source.url,
+            "revision_id": source.revision_id,
+            "revision_url": source.revision_url,
+            "wikidata_id": source.wikidata_id,
+            "sha256": source.sha256,
+            "license": WIKIPEDIA_LICENSE if source.kind == "wikipedia" else None,
+            "user_source": source.kind == "user",
+        },
+        "enabled_checks": verification.enabled_checks if verification else [],
+        "claims": claims,
+        "sentences": [s.model_dump() for s in verification.sentences] if verification else [],
+        "images": [],
+    }
+
+
+def build_description(
+    script: Script, source: SourceDoc, tags: list[str], label: str, not_run: list[str]
+) -> str:
+    lines = [script.title, "", script.hook.narration]
+    if label == "UNVERIFIED":
+        lines += ["", "UNVERIFIED: this video was not fact-checked."]
+    elif label == "PARTIALLY_VERIFIED":
+        lines += ["", f"PARTIALLY VERIFIED: these checks did not run: {', '.join(not_run)}."]
+    lines += ["", "Sources:"]
+    if source.kind == "wikipedia":
+        lines.append(
+            f"- Wikipedia, “{source.title}” (revision {source.revision_id}): {source.revision_url}"
+        )
+        lines.append(f"  Text license: {WIKIPEDIA_LICENSE}")
+    else:
+        lines.append(f"- {source.title}" + (f": {source.url}" if source.url else ""))
+    if label != "UNVERIFIED":
+        lines += ["", DISCLAIMER]
+    lines += ["", " ".join(tags)]
+    return "\n".join(lines) + "\n"
+
+
+def _srt_time(t: float) -> str:
+    ms = round(t * 1000)
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def build_srt(audio: AudioPlan) -> str:
+    blocks = []
+    n = 0
+    for seg in audio.segments:
+        for sentence in seg.sentences:
+            for chunk in caption_chunks(sentence.words, max_words=7, max_chars=42):
+                n += 1
+                text = " ".join(w.text for w in chunk)
+                blocks.append(
+                    f"{n}\n{_srt_time(chunk[0].start)} --> {_srt_time(chunk[-1].end)}\n{text}\n"
+                )
+    return "\n".join(blocks)
+
+
+def export(
+    job_id: str,
+    idea: Idea,
+    source: SourceDoc,
+    script: Script,
+    verification: Verification | None,
+    audio: AudioPlan,
+    render: RenderResult,
+    output_dir: Path,
+    verified: bool,
+    sync: dict[str, float] | None = None,
+) -> ExportResult:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    full_label = verification.label if verification and verified else "UNVERIFIED"
+    verified = full_label == "VERIFIED"
+    label = {"VERIFIED": "", "PARTIALLY_VERIFIED": "_PARTIAL"}.get(full_label, "_UNVERIFIED")
+    slug = slugify(script.title)
+    folder = output_dir / "pending" / f"{stamp}_{slug}{label}_{job_id[-6:]}"
+    folder.mkdir(parents=True, exist_ok=True)
+    video = folder / f"{slug}{label}.mp4"
+    shutil.copy2(render.video, video)
+
+    tags = hashtags(script, source, idea.topic)
+    sources = build_sources_json(idea, source, script, verification, verified)
+    sources["video"] = {
+        "file": video.name,
+        "duration_s": render.duration,
+        "frames": render.frames,
+        "encoder": render.encoder,
+        "sync": sync,
+    }
+    sources_path = folder / "sources.json"
+    sources_path.write_text(json.dumps(sources, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    description = build_description(script, source, tags, full_label, sources["checks_not_run"])
+    desc_path = folder / "description.txt"
+    desc_path.write_text(description, encoding="utf-8")
+
+    metadata = {
+        "job_id": job_id,
+        "title": script.title,
+        "description": script.hook.narration,
+        "hashtags": tags,
+        "verified": verified,
+        "label": sources["label"],
+        "topic": idea.topic,
+        "length_target_s": idea.length,
+        "tone": idea.tone,
+        "duration_s": render.duration,
+        "voice": audio.voice,
+        "source_links": [source.revision_url] if source.revision_url else [],
+        "image_credits": [],
+        "status": "pending",
+    }
+    meta_path = folder / "metadata.json"
+    meta_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    srt_path = folder / f"{slug}{label}.srt"
+    srt_path.write_text(build_srt(audio), encoding="utf-8")
+
+    return ExportResult(
+        folder=str(folder),
+        video=str(video),
+        sources_json=str(sources_path),
+        metadata_json=str(meta_path),
+        description_txt=str(desc_path),
+        srt=str(srt_path),
+        verified=verified,
+    )

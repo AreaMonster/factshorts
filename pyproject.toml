@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "factshorts"
+version = "0.1.0"
+description = "Local, free generator for fact-checked vertical short videos"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+dependencies = [
+    "pydantic>=2.14",
+    "httpx>=0.28",
+    "typer>=0.27",
+    "tomli-w>=1.0",
+    "piper-tts>=1.8",
+    "huggingface-hub>=2.4",
+    "num2words>=0.5.14",
+    "rapidfuzz>=3.14",
+    "pillow>=13.0",
+    "numpy>=2.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.2",
+    "ruff>=0.17",
+]
+
+[project.scripts]
+factshorts = "factshorts.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/factshorts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+pythonpath = ["tests"]
+markers = [
+    "ffmpeg: needs a local ffmpeg/ffprobe binary (no network)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]  # unicode quotes/dashes are intentional test data

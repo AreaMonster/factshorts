@@ -1,0 +1,98 @@
+# factshorts configuration.
+# Every tunable lives here. Paths may be absolute or relative to this file.
+# Never put API keys or remote LLM endpoints in here: `factshorts doctor` fails on them.
+
+[general]
+# Where work files, outputs, caches, logs and the database go.
+# Empty = platform default (Windows: <SystemDrive>\factshorts-data, Linux: ~/.local/share/factshorts).
+data_dir = ""
+log_level = "INFO"
+
+[ollama]
+url = "http://127.0.0.1:11434"
+# Use the largest model that fits your VRAM/RAM (see README). The judge should be a
+# different model family than the writer so it doesn't share its blind spots.
+writer_model = "qwen3:14b"
+judge_model = "llama3.1:8b"
+temperature = 0.4
+num_ctx = 12288
+timeout_s = 600
+# Disable "thinking" output on models that support it (faster, cleaner JSON).
+think = false
+
+[wikipedia]
+language = "en"
+# Wikimedia asks for a descriptive User-Agent with contact info. Replace the placeholder.
+user_agent = "factshorts/0.1 (local fact-video tool; contact: you@example.com)"
+# Claims come from the lead plus this many following sections (best-maintained text).
+max_sections = 3
+skip_sections = ["See also", "References", "Notes", "External links", "Further reading", "Bibliography", "Sources", "Citations"]
+search_limit = 5
+
+[cache]
+http_ttl_hours = 168
+
+[script]
+default_length = 45          # seconds: 30, 45 or 60
+default_tone = "neutral"     # neutral, funny, dramatic, kid-friendly
+words_per_minute = 150
+min_scenes = 4
+max_scenes = 7
+max_json_retries = 3
+# Narration may use at most this fraction above the word budget before it is rejected/retried.
+budget_tolerance = 0.10
+# The source text given to the LLM is cut to this many words (lead first).
+max_source_words = 4000
+
+[verification]
+quote_check = true
+entity_check = true
+wikidata_check = true
+nli_check = true
+llm_judge = true
+# Rounded numbers ("about 9,000") may deviate at most this much from the source value.
+max_rounding_error = 0.05
+# Extra relative tolerance after unit conversion (e.g. ft -> m).
+conversion_tolerance = 0.005
+# Whole-script regeneration attempts when checks fail (targeted scene rewrites come in phase 2).
+max_script_attempts = 3
+require_review = true
+
+[tts]
+# Piper voice name from https://huggingface.co/rhasspy/piper-voices
+voice = "en_US-ryan-high"
+length_scale = 1.0           # >1 slower, <1 faster
+sentence_pause_ms = 250
+scene_pause_ms = 450
+lead_in_ms = 150
+tail_ms = 600
+use_whisper = false
+
+# Spoken replacements for names the voice mispronounces.
+[tts.pronunciations]
+"Sagarmatha" = "Sah-gar-MAH-tah"
+"Chomolungma" = "Choh-moh-LUNG-mah"
+
+[render]
+width = 1080
+height = 1920
+fps = 30
+theme = "default"
+# auto picks the first working of nvenc, amf, qsv, then libx264.
+encoder = "auto"
+# Parallel scene renderers; 0 = auto. Hardware encoders are capped by max_hw_sessions.
+workers = 0
+max_hw_sessions = 4
+video_quality = 20           # CRF / CQ value, lower = better
+audio_bitrate = "192k"
+lufs_target = -14.0
+
+[output]
+# Relative paths resolve against data_dir.
+dir = "output"
+
+[web]
+host = "127.0.0.1"
+port = 8000
+# argon2 hash; required for any non-localhost host.
+password_hash = ""
