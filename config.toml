@@ -39,12 +39,15 @@ default_length = 75
 default_tone = "neutral"     # neutral, funny, dramatic, kid-friendly
 # Measured speaking rate of the voice (Kokoro am_michael: ~160 words per minute).
 words_per_minute = 160
-# Scene count follows the length (75 s / 6.5 ≈ 12 scenes), within these bounds.
-seconds_per_scene = 6.5
+# Scene count follows the length (75 s / 9 ≈ 8 scenes of 2-3 sentences), within these bounds.
+seconds_per_scene = 9.0
 min_scenes = 4
 max_scenes = 16
 # Extra LLM calls that add scenes when a draft is too short or scenes fail fact-checking.
 max_topups = 2
+# After fact-checking, an editing pass smooths transitions and simplifies words. Edited scenes
+# are verified again and only kept if they still pass.
+polish = true
 # Videos targeting 60 s or more are extended with extra scenes until the narration is at
 # least this long (TikTok Creator Rewards only pays for videos longer than 1 minute).
 min_duration_s = 62.0
@@ -62,6 +65,9 @@ nli_check = true
 llm_judge = true
 # Rounded numbers ("about 9,000") may deviate at most this much from the source value.
 max_rounding_error = 0.05
+# The writer sometimes mis-copies its quote. A near-copy (at least this similar, 0-100) is
+# replaced by the exact source sentence; all checks then run against the real text. 0 = off.
+snap_quote_min_ratio = 80
 # Extra relative tolerance after unit conversion (e.g. ft -> m).
 conversion_tolerance = 0.005
 # Rounds of targeted scene rewrites before a failing scene is dropped (or the idea rejected).
@@ -186,6 +192,11 @@ wan_fps = 24
 min_playback_speed = 0.55    # stretch short clips to fill a scene, down to this speed
 crossfade_frames = 8
 device = "cuda"
+# A vision model (default: the judge model, gemma4:26b) looks at every illustration and the
+# narration it belongs to; wrong pictures (e.g. a ringed planet for Venus) are redrawn.
+review_images = true
+review_model = ""
+max_redraws = 2
 
 [output]
 # Relative paths resolve against data_dir.

@@ -6,9 +6,10 @@ cached per (claim text, quote), so after a targeted rewrite only changed claims 
 
 from __future__ import annotations
 
+import itertools
 import re
 
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 
 from factshorts.config import VerificationConfig
 from factshorts.models import (
@@ -24,7 +25,7 @@ from factshorts.sources.wikidata import WDValue
 from factshorts.verify.entities import Vocab, build_vocab
 from factshorts.verify.llm_judge import Judge
 from factshorts.verify.nli import NLIModel, nli_check
-from factshorts.verify.normalize import normalize_chars, split_sentences
+from factshorts.verify.normalize import normalize_chars, split_paragraphs, split_sentences
 from factshorts.verify.programmatic import entity_check, has_checkable_entities, quote_check
 from factshorts.verify.wikidata_check import wikidata_check
 
@@ -73,10 +74,40 @@ class Verifier:
         self.subject = subject_names(source)
         self._claims: dict[tuple[str, str], tuple[list[CheckResult], str | None]] = {}
         self._fillers: dict[str, CheckResult] = {}
+        # Snap targets: single source sentences and adjacent pairs (writers often merge two).
+        self._sentences = []
+        for para in split_paragraphs(source.text):
+            sents = split_sentences(para)
+            self._sentences += sents
+            self._sentences += [f"{a} {b}" for a, b in itertools.pairwise(sents)]
+        self._snapped: dict[str, float] = {}  # exact source sentence → writer's similarity
 
     # --- public -------------------------------------------------------------------------
 
+    def snap_quotes(self, script: Script) -> int:
+        """Replace mis-copied quotes with the source sentence they were copied from."""
+        if not self.cfg.snap_quote_min_ratio:
+            return 0
+        changed = 0
+        for seg in script.segments:
+            for claim in seg.claims:
+                if quote_check(claim.source_quote, self.source.text).paragraph is not None:
+                    continue
+                best = process.extractOne(
+                    normalize_chars(claim.source_quote),
+                    self._sentences,
+                    scorer=fuzz.ratio,
+                    score_cutoff=self.cfg.snap_quote_min_ratio,
+                )
+                if best is not None:
+                    self._snapped[normalize_chars(best[0])] = best[1]
+                    claim.source_quote = best[0]
+                    changed += 1
+        return changed
+
     def verify(self, script: Script, attempt: int = 1) -> Verification:
+        """Check every claim and sentence. Mis-copied quotes are snapped first (in place)."""
+        self.snap_quotes(script)
         cfg = self.cfg
         vocab = build_vocab(
             self.source.text,
@@ -192,6 +223,12 @@ class Verifier:
         results: list[CheckResult] = []
         qm = quote_check(quote, self.source.text)
         paragraph = qm.paragraph
+        similarity = self._snapped.get(normalize_chars(quote))
+        if similarity is not None and qm.result.status == "pass":
+            qm.result.reason = (
+                f"exact source sentence; the writer's copy was "
+                f"{similarity:.0f}% similar and was replaced"
+            )
         if cfg.quote_check:
             results.append(qm.result)
         if cfg.entity_check:

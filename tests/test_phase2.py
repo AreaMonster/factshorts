@@ -355,7 +355,7 @@ def test_packed_sentences_keep_quotes_on_the_factual_part() -> None:
 
 
 def test_topup_skips_scenes_that_repeat_existing_facts(script: Script, source: SourceDoc) -> None:
-    from conftest import script_to_llm
+    from conftest import as_new, script_to_llm
     from factshorts.config import Config
     from factshorts.core.script import LLMMoreScenes, ScriptWriter
     from factshorts.models import Idea
@@ -363,7 +363,7 @@ def test_topup_skips_scenes_that_repeat_existing_facts(script: Script, source: S
     cfg = Config()
     cfg.script.max_topups = 1
     repeat = script_to_llm(script).scenes[0]  # same sentences as s1
-    llm = FakeLLM({"LLMMoreScenes": [LLMMoreScenes(scenes=[repeat])]})
+    llm = FakeLLM({"LLMMoreScenes": [LLMMoreScenes(scenes=[as_new(repeat)])]})
     writer = ScriptWriter(Idea(text="Testa?", length=75), source, llm, "m", cfg.script, cfg.tts)
     before = len(script.scenes)
     assert len(writer.top_up(script).scenes) == before
@@ -379,3 +379,49 @@ def test_orbit_distance_is_not_compared_with_distance_from_earth() -> None:
         CFG,
     )
     assert res.status == "na"
+
+
+def test_miscopied_quote_is_snapped_to_the_real_sentence(script: Script, source: SourceDoc) -> None:
+    claim = script.scenes[1].claims[0]
+    claim.source_quote = (
+        "The mountain was first climbed on 14 July 1931 by Ada Brenner & Tomas Kel."
+    )
+    v = _verifier(source).verify(script)
+    assert v.passed, v.failures
+    assert claim.source_quote == (
+        "The mountain was first climbed on 14 July 1931 by Ada Brenner and Tomas Kell."
+    )
+    quote = next(c for c in v.claims if c.claim_id == claim.id).checks[0]
+    assert "replaced" in quote.reason
+
+
+def test_snapping_does_not_rescue_a_wrong_claim(script: Script, source: SourceDoc) -> None:
+    """The quote gets fixed, but a changed fact in the narration still fails."""
+    seg = script.scenes[1]
+    seg.narration = "Ada Brenner and Tomas Kell first climbed it in 1913."
+    seg.claims[0].text = seg.narration
+    seg.claims[
+        0
+    ].source_quote = "The mountain was first climbed in 1913 by Ada Brenner and Tomas Kell."
+    v = _verifier(source).verify(script)
+    assert not v.passed
+    assert any("1913" in f for f in v.failures)
+
+
+def test_unrelated_quote_is_not_snapped(script: Script, source: SourceDoc) -> None:
+    script.scenes[1].claims[0].source_quote = "Climbers love the long sunny summers there."
+    v = _verifier(source).verify(script)
+    assert not v.passed
+    assert any("quote not found" in f for f in v.failures)
+
+
+def test_quote_merging_two_sentences_is_snapped(script: Script, source: SourceDoc) -> None:
+    claim = script.scenes[3].claims[0]  # glacier sentence
+    claim.source_quote = (
+        "The mountain was first climbed on 14 July 1931 by Ada Brenner and "
+        "Tomas Kell; its summit glacier covers about 38 km² and is shrinking "
+        "by roughly 12 m per year."
+    )
+    _verifier(source).verify(script)
+    assert claim.source_quote.startswith("The mountain was first climbed on 14 July 1931")
+    assert claim.source_quote.endswith("shrinking by roughly 12 m per year.")

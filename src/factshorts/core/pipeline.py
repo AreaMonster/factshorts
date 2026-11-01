@@ -11,10 +11,11 @@ from datetime import datetime
 from pathlib import Path
 
 from factshorts.config import Config
+from factshorts.core.art import ImageReviewer
 from factshorts.core.export import export, source_label
 from factshorts.core.http import CachedHttp
 from factshorts.core.llm import LLM, OllamaLLM
-from factshorts.core.script import ScriptWriter, generate_script
+from factshorts.core.script import ScriptWriter, generate_script, replace_segment
 from factshorts.core.sourcing import SourcingError, resolve_wikipedia
 from factshorts.core.tts import Synthesizer, build_audio, make_synth
 from factshorts.core.visuals import VisualBuilder
@@ -27,6 +28,7 @@ from factshorts.models import (
     Idea,
     RenderResult,
     Script,
+    Segment,
     SourceDoc,
     Verification,
     VisualsPlan,
@@ -96,11 +98,13 @@ def new_job_id() -> str:
 
 def default_services(cfg: Config, db: Database) -> Services:
     http = CachedHttp(cfg.wikipedia.user_agent, db, cfg.cache.http_ttl_hours)
+    llm = OllamaLLM(cfg.ollama)
+    reviewer = ImageReviewer(llm, cfg.visuals.review_model or cfg.ollama.judge_model)
     return Services(
-        llm=OllamaLLM(cfg.ollama),
+        llm=llm,
         wiki=Wikipedia(http, cfg.wikipedia),
         synth_factory=lambda: make_synth(cfg.tts, cfg.models_dir),
-        visuals_factory=lambda theme: VisualBuilder(cfg, theme),
+        visuals_factory=lambda theme: VisualBuilder(cfg, theme, reviewer=reviewer),
         nli_factory=lambda: TransformersNLI(
             cfg.verification.nli_model, cfg.verification.nli_device
         ),
@@ -292,9 +296,9 @@ class Pipeline:
             result = verifier.verify(script, attempt=n)
             wd.write_model(f"verification_attempt{n}.json", result)
 
-        # 2. Scenes that still fail are dropped if the video stays coherent.
+        # 2. Scenes that still fail are dropped (and replaced with fresh, checked scenes).
         if not result.passed:
-            script, result, n = self._drop_failing(script, result, verifier, wd, n, notify)
+            script, result, n = self._drop_failing(script, result, verifier, wd, n, notify, writer)
 
         # 3. Top up if dropping made the video too short; new scenes must pass as well.
         if script.word_count() < writer.budget * 0.9 and self.cfg.script.max_topups:
@@ -305,12 +309,51 @@ class Pipeline:
                 result = verifier.verify(script, attempt=n)
                 if not result.passed:
                     script, result, n = self._drop_failing(script, result, verifier, wd, n, notify)
+
+        # 4. Editing pass for flow; edited segments are kept only if they still pass.
+        if self.cfg.script.polish:
+            script, result, n = self._polish(script, result, writer, verifier, wd, n, notify)
         wd.write_model("script.json", script)
         wd.write_model("verification.json", result)
         notify(
             "verification",
             f"passed: {len(result.claims)} claims, {script.word_count()} words ({result.label})",
         )
+
+    def _polish(
+        self,
+        script: Script,
+        result: Verification,
+        writer: ScriptWriter,
+        verifier: Verifier,
+        wd: WorkDir,
+        n: int,
+        notify: ProgressFn,
+    ) -> tuple[Script, Verification, int]:
+        polished = writer.polish(script.model_copy(deep=True))
+        if polished is script or len(polished.scenes) != len(script.scenes):
+            return script, result, n
+        check = verifier.verify(polished, attempt=n + 1)
+        bad = failed_segments(check)
+        merged = script.model_copy(deep=True)
+        kept = 0
+        for old_seg, new_seg in zip(script.segments, polished.segments, strict=True):
+            if new_seg.id not in bad:
+                merged = replace_segment(merged, old_seg.id, new_seg)
+                kept += 1
+        if "title" not in bad:
+            merged.title = polished.title
+        n += 1
+        final = verifier.verify(merged, attempt=n)
+        wd.write_model(f"verification_attempt{n}.json", final)
+        if not final.passed:  # segments that pass alone can still clash; keep the original
+            notify("verification", "editing pass rejected; keeping the checked draft")
+            return script, result, n
+        notify(
+            "verification",
+            f"editing pass: {kept}/{len(script.segments)} segments rewritten for flow",
+        )
+        return merged, final, n
 
     def _drop_failing(
         self,
@@ -320,19 +363,60 @@ class Pipeline:
         wd: WorkDir,
         n: int,
         notify: ProgressFn,
+        writer: ScriptWriter | None = None,
     ) -> tuple[Script, Verification, int]:
+        """Drop segments that still fail. With a writer, top up to refill the story first;
+        reject only if fewer than min_scenes checked scenes remain."""
         failed = failed_segments(result)
+        original_failures = result.failures
+        if "outro" in failed:
+            # A plain sign-off states no fact, so it cannot fail the checks.
+            script.outro = Segment(
+                narration="Follow for more facts.", on_screen_text="Follow for more", visual="title"
+            )
+            failed.discard("outro")
+            notify("verification", "outro still failed; using a plain sign-off")
         scene_ids = {s.id for s in script.scenes}
         keep = [s for s in script.scenes if s.id not in failed]
+        if "hook" in failed and len(keep) > self.cfg.script.min_scenes:
+            # The first good scene becomes the opening; the story still starts coherently.
+            first = keep.pop(0)
+            script.hook = first.model_copy(update={"visual": "title"})
+            failed.discard("hook")
+            notify("verification", f"hook still failed; scene {first.id} now opens the video")
+        if failed <= scene_ids and len(keep) < self.cfg.script.min_scenes and writer:
+            avoid = [x.narration for x in script.scenes if x.id in failed]
+            script.scenes = keep
+            script.assign_ids()
+            notify("verification", f"dropped {len(failed)} failing scene(s); writing new ones")
+            before = {x.narration for x in script.scenes}
+            script = writer.top_up(script, avoid=avoid)
+            n += 1
+            result = verifier.verify(script, attempt=n)
+            wd.write_model(f"verification_attempt{n}.json", result)
+            if result.passed and len(script.scenes) >= self.cfg.script.min_scenes:
+                return script, result, n
+            # Keep the new scenes that passed; the old ones passed before.
+            new_failed = {
+                x.id
+                for x in script.scenes
+                if x.narration not in before and x.id in failed_segments(result)
+            }
+            failed = new_failed | (failed_segments(result) - {x.id for x in script.scenes})
+            keep = [x for x in script.scenes if x.id not in failed]
+            scene_ids = {x.id for x in script.scenes}
         if not failed <= scene_ids or len(keep) < self.cfg.script.min_scenes:
             wd.write_model("script.json", script)
+            reasons = result.failures or original_failures
             raise Rejected(
-                "fact-check failed after targeted rewrites: " + "; ".join(result.failures[:5])
+                f"fact-check failed after targeted rewrites ({len(keep)} checked scene(s) left, "
+                f"minimum {self.cfg.script.min_scenes}): " + "; ".join(reasons[:5])
             )
-        notify(
-            "verification",
-            f"dropping {len(failed)} scene(s) that still fail: {', '.join(sorted(failed))}",
-        )
+        if failed:
+            notify(
+                "verification",
+                f"dropping {len(failed)} scene(s) that still fail: {', '.join(sorted(failed))}",
+            )
         script.scenes = keep
         script.assign_ids()
         n += 1
@@ -383,14 +467,15 @@ class Pipeline:
             self.cfg.script,
             self.cfg.tts,
         )
-        before = {s.id for s in script.scenes}
+        # New scenes are inserted mid-story and renumber the ids, so tell them apart by text.
+        before = {s.narration for s in script.scenes}
         extra_words = int(seconds * self.cfg.script.words_per_minute / 60)
         script = writer.top_up(script, target_words=script.word_count() + extra_words)
         verifier = self._verifier(wd)
         result = verifier.verify(script)
         failed = failed_segments(result)
         if failed:
-            kept = [s for s in script.scenes if s.id not in failed or s.id in before]
+            kept = [s for s in script.scenes if s.id not in failed or s.narration in before]
             notify(
                 "voice",
                 f"dropped {len(script.scenes) - len(kept)} new scene(s) that failed fact-checking",
@@ -426,6 +511,7 @@ class Pipeline:
                 llm,
                 unload_llm=getattr(llm, "unload_all", lambda: None),
                 notify=lambda msg: notify("visuals", msg),
+                source=wd.read_model("source.json", SourceDoc),
             )
             kinds = [s.kind for s in plan.scenes]
             notify(

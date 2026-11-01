@@ -13,9 +13,9 @@ import numpy as np
 from PIL import Image
 
 from factshorts.config import Config
-from factshorts.core.art import plan_shots
+from factshorts.core.art import ImageReviewer, ImageVerdict, plan_shots
 from factshorts.core.llm import LLM
-from factshorts.models import AudioPlan, SceneVisual, Script, VisualsPlan
+from factshorts.models import AudioPlan, SceneVisual, Script, SourceDoc, VisualsPlan
 from factshorts.render import ffmpeg
 from factshorts.render.backgrounds import (
     CAMERA_MOVES,
@@ -27,6 +27,7 @@ from factshorts.render.backgrounds import (
 )
 from factshorts.render.themes import Theme
 from factshorts.render.timeline import segment_frame_ranges
+from factshorts.verify.aggregate import subject_names
 
 log = logging.getLogger(__name__)
 
@@ -60,9 +61,18 @@ def _key(*parts: object) -> str:
 class VisualBuilder:
     """Builds background clips. Model classes are injectable so tests can use fakes."""
 
-    def __init__(self, cfg: Config, theme: Theme, image_gen=None, depth=None, motion=None):
+    def __init__(
+        self,
+        cfg: Config,
+        theme: Theme,
+        image_gen=None,
+        depth=None,
+        motion=None,
+        reviewer: ImageReviewer | None = None,
+    ):
         from factshorts.render import aigen
 
+        self.reviewer = reviewer
         self.cfg = cfg
         self.v = cfg.visuals
         self.theme = theme
@@ -82,14 +92,26 @@ class VisualBuilder:
         llm: LLM | None,
         unload_llm: Callable[[], None],
         notify: Notify,
+        source: SourceDoc | None = None,
     ) -> VisualsPlan:
         v, fps = self.v, self.cfg.render.fps
         if v.mode == "off":
             return VisualsPlan(mode="off")
         shots = script.model_copy(deep=True)
+        self.names = set(subject_names(source)) if source else set()
+        self.look = ""
+        self.title = source.title if source else script.title
         if llm is not None:
             notify("planning illustrations")
-            plan_shots(shots, llm, self.cfg.ollama.writer_model, self.theme.art.style_name)
+            context = source.sections[0].text[:1500] if source and source.sections else ""
+            _, self.look = plan_shots(
+                shots,
+                llm,
+                self.cfg.ollama.writer_model,
+                self.theme.art.style_name,
+                context,
+                self.names,
+            )
         (out_dir / "shots.json").write_text(
             json.dumps(
                 [
@@ -115,13 +137,15 @@ class VisualBuilder:
                 kind=kinds[s.id],  # type: ignore[arg-type]
                 frames=ranges[s.id][1] - ranges[s.id][0],
                 prompt=f"{s.image_prompt}. {self.theme.art.style}",
+                review="" if self.reviewer is not None and self.v.review_images else "not checked",
                 motion=s.motion,
                 seed=seed_for(job_id, s.id),
             )
             for s in shots.segments
         ]
 
-        images = self._illustrations(scenes, out_dir, notify)
+        narration = {s.id: s.narration for s in shots.segments}
+        images = self._illustrations(scenes, out_dir, notify, narration, unload_llm)
         clips = self._motion_clips(scenes, images, notify)
         depths = self._depths(scenes, images, notify)
 
@@ -163,29 +187,95 @@ class VisualBuilder:
 
     # --- stages -----------------------------------------------------------------------
 
-    def _illustrations(
-        self, scenes: list[SceneVisual], out_dir: Path, notify: Notify
-    ) -> dict[str, Image.Image]:
+    def _image_path(self, s: SceneVisual) -> Path:
         v = self.v
-        keys = {
-            s.segment_id: _key(
-                v.image_model, s.prompt, s.seed, v.image_width, v.image_height, v.image_steps
-            )
-            for s in scenes
-        }
-        missing = [
-            s for s in scenes if not (self.cache / "images" / f"{keys[s.segment_id]}.png").is_file()
-        ]
+        key = _key(v.image_model, s.prompt, s.seed, v.image_width, v.image_height, v.image_steps)
+        return self.cache / "images" / f"{key}.png"
+
+    def _draw(self, scenes: list[SceneVisual], notify: Notify, what: str) -> None:
+        missing = [s for s in scenes if not self._image_path(s).is_file()]
         if missing:
-            notify(f"drawing {len(missing)} illustrations")
+            notify(f"drawing {len(missing)} {what}")
             generated = self.image_gen.generate(
                 [s.prompt for s in missing], [s.seed for s in missing]
             )
             for s, img in zip(missing, generated, strict=True):
-                img.save(self.cache / "images" / f"{keys[s.segment_id]}.png")
+                img.save(self._image_path(s))
+
+    def _review(self, s: SceneVisual, narration: str) -> ImageVerdict:
+        """Vision check, cached next to the image (per narration)."""
+        assert self.reviewer is not None
+        path = self._image_path(s)
+        cached = path.with_suffix(f".{_key(narration)}.review.json")
+        if cached.is_file():
+            return ImageVerdict.model_validate_json(cached.read_text(encoding="utf-8"))
+        base = s.prompt.removesuffix(f". {self.theme.art.style}")
+        verdict = self.reviewer.review(path, narration, base, self.title, self.look)
+        cached.write_text(verdict.model_dump_json(), encoding="utf-8")
+        return verdict
+
+    def _illustrations(
+        self,
+        scenes: list[SceneVisual],
+        out_dir: Path,
+        notify: Notify,
+        narration: dict[str, str],
+        unload_llm: Callable[[], None],
+    ) -> dict[str, Image.Image]:
+        style = self.theme.art.style
+        self._draw(scenes, notify, "illustrations")
+        if self.reviewer is not None and self.v.review_images:
+            redraws = dict.fromkeys((s.segment_id for s in scenes), 0)
+            for rnd in range(self.v.max_redraws + 1):
+                notify(
+                    "checking pictures against the narration"
+                    if rnd == 0
+                    else f"checking redrawn pictures (round {rnd})"
+                )
+                todo = [s for s in scenes if s.review in ("", "pending")]
+                failing = []
+                for s in todo:
+                    verdict = self._review(s, narration[s.segment_id])
+                    if verdict.matches:
+                        n = redraws[s.segment_id]
+                        s.review = "ok" if n == 0 else f"ok after {n} redraw(s)"
+                    else:
+                        failing.append((s, verdict))
+                if not failing:
+                    break
+                if rnd == self.v.max_redraws:
+                    # Out of redraws: fall back to a plain picture of the subject.
+                    for s, verdict in failing:
+                        s.review = "fallback: " + "; ".join(verdict.problems)[:300]
+                        plain = (
+                            f"a simple, calm picture of the main subject, centered. "
+                            f"The main subject: {self.look}"
+                            if self.look
+                            else "a calm, simple wide landscape under a soft sky"
+                        )
+                        s.prompt, s.seed = f"{plain}. {style}", s.seed + 1000
+                    unload_llm()
+                    self._draw([s for s, _ in failing], notify, "fallback pictures")
+                    break
+                notify(
+                    f"redrawing {len(failing)} picture(s) that did not fit: "
+                    + ", ".join(s.segment_id for s, _ in failing)
+                )
+                for s, verdict in failing:
+                    log.info("picture %s rejected: %s", s.segment_id, verdict.problems)
+                    base = s.prompt.removesuffix(f". {style}")
+                    new = self.reviewer.revise(
+                        narration[s.segment_id], base, verdict, self.look, self.names
+                    )
+                    s.prompt, s.seed = f"{new}. {style}", s.seed + 1
+                    s.review = "pending"
+                    redraws[s.segment_id] += 1
+                unload_llm()
+                self._draw([s for s, _ in failing], notify, "pictures again")
+            unload_llm()
         images = {}
         for s in scenes:
-            src = self.cache / "images" / f"{keys[s.segment_id]}.png"
+            src = self._image_path(s)
             dst = out_dir / f"{s.segment_id}.png"
             shutil.copy2(src, dst)
             s.image = dst.name

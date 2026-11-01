@@ -64,10 +64,11 @@ class ScriptConfig(_Section):
     default_length: int = Field(default=75, ge=20, le=180)
     default_tone: Tone = "neutral"
     words_per_minute: int = 160
-    seconds_per_scene: float = 6.5
+    seconds_per_scene: float = 9.0
     min_scenes: int = 4
     max_scenes: int = 16
     max_topups: int = 2
+    polish: bool = True  # editing pass for flow after fact-checking (re-verified)
     # Videos targeting >= 60 s must end up at least this long (TikTok pays for > 1 minute).
     min_duration_s: float = 62.0
     max_json_retries: int = 3
@@ -125,6 +126,9 @@ class VerificationConfig(_Section):
     nli_check: bool = True
     llm_judge: bool = True
     max_rounding_error: float = 0.05
+    # A near-copy of a source sentence (this similar, 0-100) is replaced by the exact sentence
+    # before checking; the claim is then verified against the real text. 0 disables it.
+    snap_quote_min_ratio: float = 80
     conversion_tolerance: float = 0.005
     # Rounds of targeted scene rewrites before a failing scene is dropped (or the idea rejected).
     max_rewrite_rounds: int = 3
@@ -184,6 +188,10 @@ class VisualsConfig(_Section):
     min_playback_speed: float = 0.55
     crossfade_frames: int = 8
     device: str = "cuda"
+    # A vision model checks every illustration against its narration; mismatches are redrawn.
+    review_images: bool = True
+    review_model: str = ""  # empty = [ollama].judge_model
+    max_redraws: int = 2
 
 
 class OutputConfig(_Section):

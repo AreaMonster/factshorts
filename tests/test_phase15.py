@@ -16,6 +16,7 @@ from conftest import (
     FakeMotion,
     FakeSynth,
     FakeWiki,
+    as_new,
     needs_ffmpeg,
     new_fact_scenes,
     script_to_llm,
@@ -132,26 +133,30 @@ def test_sanitize_drops_offending_clauses() -> None:
 def test_plan_shots_retries_then_fills_every_segment(script: Script) -> None:
     ids = [s.id for s in script.segments]
     bad = ShotList(
+        subject_look="a snowy peak",
         shots=[
             Shot(
+                shows_subject=True,
                 segment_id=i,
                 image_prompt="a chart with numbers 1 2 3",
                 motion="bars grow",
                 visual_interest=2,
             )
             for i in ids
-        ]
+        ],
     )
     good = ShotList(
+        subject_look="a snowy peak",
         shots=[
             Shot(
+                shows_subject=True,
                 segment_id=i,
                 image_prompt=f"a calm snowy valley, view {n}",
                 motion="snow falls",
                 visual_interest=n % 5 + 1,
             )
             for n, i in enumerate(ids)
-        ]
+        ],
     )
     llm = FakeLLM({"ShotList": [bad, good]})
     plan_shots(script, llm, "m", "flat vector art")
@@ -211,15 +216,17 @@ def test_pipeline_with_hybrid_ai_visuals(
     cfg.visuals.wan_scenes = 2
     image_gen, motion = FakeImageGen(), FakeMotion()
     shots = ShotList(
+        subject_look="a snowy peak",
         shots=[
             Shot(
+                shows_subject=True,
                 segment_id=s.id,
                 image_prompt=f"a quiet snowy scene {s.id}",
                 motion="snow falls",
                 visual_interest=3,
             )
             for s in script.segments
-        ]
+        ],
     )
     llm = FakeLLM(
         {
@@ -321,7 +328,7 @@ def test_scene_that_keeps_failing_is_dropped_and_replaced(
             "ArticleGuess": [ArticleGuess(article_title=source.title, search_query=source.title)],
             "LLMScript": [script_to_llm(bad)],
             "LLMSegment": [script_to_llm(bad).scenes[0]],  # rewrites never fix it
-            "LLMMoreScenes": [LLMMoreScenes(scenes=[script_to_llm(script).scenes[0]])],
+            "LLMMoreScenes": [LLMMoreScenes(scenes=[as_new(script_to_llm(script).scenes[0])])],
         }
     )
     pipeline = Pipeline(cfg, db, Services(llm=llm, wiki=FakeWiki(source), synth_factory=FakeSynth))

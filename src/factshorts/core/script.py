@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 
 
 class LLMSentence(BaseModel):
-    text: str = Field(description="One narration sentence of 8 to 16 words")
+    text: str = Field(description="One narration sentence, 5 to 20 words, plain words")
     source_quotes: list[str] = Field(
         description="Sentences copied character-for-character from SOURCE that prove this "
         "sentence; empty only if the sentence states no fact",
@@ -29,20 +29,30 @@ class LLMSentence(BaseModel):
 
 
 class LLMSegment(BaseModel):
-    sentences: list[LLMSentence] = Field(min_length=1, max_length=3)
+    sentences: list[LLMSentence] = Field(min_length=1, max_length=4)
     on_screen_text: str
     visual: SceneType
 
 
 class LLMScript(BaseModel):
+    story_plan: list[str] = Field(
+        description="The story beats in order: the question, each step that leads to the "
+        "answer, and the payoff. One short line each.",
+        min_length=3,
+        max_length=8,
+    )
     title: str
     hook: LLMSegment
     scenes: list[LLMSegment] = Field(min_length=1, max_length=16)
     outro: LLMSegment
 
 
+class LLMNewScene(LLMSegment):
+    insert_after: str = Field(description="Id of the segment this scene follows (hook, s1, ...)")
+
+
 class LLMMoreScenes(BaseModel):
-    scenes: list[LLMSegment] = Field(min_length=1, max_length=8)
+    scenes: list[LLMNewScene] = Field(min_length=1, max_length=8)
 
 
 TONES = {
@@ -53,9 +63,28 @@ TONES = {
 }
 
 SYSTEM_PROMPT = """You write scripts for vertical fact videos (TikTok, YouTube Shorts) that are \
-about {length} seconds long.
+about {length} seconds long. Viewers should enjoy watching it to the end and understand
+everything the first time they hear it.
 
-STRICT RULES
+STORY
+A. Tell ONE story that answers the IDEA. Do not list facts. Plan the beats first in
+   story_plan: open with the most surprising fact or the question, then build up step by step,
+   each scene following from the one before, to the answer, then a short payoff.
+B. Every sentence connects to the previous one, like a good teacher talking: "But...",
+   "That's because...", "So...", "And it gets stranger:", "Here's the thing:". Only say
+   "because" or "that's why" when SOURCE itself states that cause.
+C. Plain English for a curious 12-year-old: short sentences, everyday words, one idea per
+   sentence. If a technical term is needed (e.g. "greenhouse effect"), explain it in simple
+   words that SOURCE supports.
+D. Choose facts that help answer the IDEA; skip trivia that does not fit the story.
+E. Vary how sentences start; do not begin every sentence with the subject's name.
+G. Explain only what SOURCE explains. Never describe how a process works (how heat gets
+   trapped, what happens over time, what something "means") unless SOURCE says it. A simple
+   true story told with SOURCE's own facts beats a clever explanation SOURCE does not support.
+F. Never make the same point twice. Every scene adds something new; the payoff is said once,
+   and the outro is a short sign-off that does not repeat it.
+
+FACT RULES (strict)
 1. Use only facts stated in SOURCE. If unsure, leave it out. Do not add outside knowledge.
 2. Narration is a list of sentences. For every sentence that states a fact, put in
    source_quotes the complete SOURCE sentence(s) that prove it, copied character-for-character
@@ -67,13 +96,13 @@ STRICT RULES
    pounds or Fahrenheit. Write numbers as digits. You may round a source number
    (8,848.86 m -> 8,849 meters) but never change it.
 6. American English spelling.
-7. Write exactly {scenes} scenes. Each scene has 1-2 sentences with about {wps} words in
+7. Write exactly {scenes} scenes. Each scene has 2-3 sentences with about {wps} words in
    total, and on_screen_text of at most 8 words that only repeats facts from that scene.
-8. The hook is one punchy sentence that makes viewers keep watching. It must not
-   misrepresent the facts (no clickbait).
+8. The hook is 1-2 punchy sentences that make viewers keep watching (a surprising fact or a
+   question the video answers). It must not misrepresent the facts (no clickbait).
 9. The outro is one short closing line without new facts (empty source_quotes).
-10. Total narration: about {budget} words and never more (hook + all scenes + outro). Use many
-    different facts from SOURCE; do not repeat a fact.
+10. Total narration: about {budget} words and never more (hook + all scenes + outro).
+    Do not repeat a fact.
 11. Tone: {tone_desc}. Tone may change wording, never facts.
 12. visual per scene, one of: big_number (one striking number), comparison (two values),
     timeline (dates), map_pin (a place), icon_list (a few items), quote (a notable sentence),
@@ -90,18 +119,30 @@ REWRITE_PROMPT = """Segment {seg_id} of the script failed fact-checking:
 
 Rewrite only segment {seg_id} so that every sentence is fully supported by SOURCE (same rules:
 quotes copied exactly, every number and name inside its quote, metric units, nothing beyond
-what the quote says). Keep the same topic if SOURCE supports it; otherwise use a different fact
-from SOURCE that the script does not use yet. {role}Return only the rewritten segment."""
+what the quote says). The fix is usually to say LESS: state the fact plainly, the way SOURCE
+says it, and drop explanations or causes SOURCE does not state. Keep the same topic if SOURCE
+supports it; otherwise use a different fact from SOURCE that the script does not use yet.
+It must still flow in the story: it follows "{before}" and leads into "{after}".
+{role}Return only the rewritten segment."""
 
 ROLE_HINTS = {
     "hook": "This is the hook: one punchy sentence that does not misrepresent facts. ",
     "outro": "This is the outro: one short closing line without facts (empty source_quotes). ",
-    "scene": "Write 1-2 sentences. ",
+    "scene": "Write 2-3 sentences. ",
 }
 
 TOPUP_PROMPT = """The script is too short: {words} words, but it needs about {budget}.
 Write {count} MORE scenes (same JSON fields and rules) with NEW facts from SOURCE that the \
-script does not use yet. Do not repeat any fact. Return only the new scenes.{avoid}"""
+script does not use yet and that deepen the story. For each, set insert_after to the id of the
+segment it should follow so the story still flows (e.g. "s2"). Do not repeat any fact. Return
+only the new scenes.{avoid}"""
+
+POLISH_PROMPT = """This script passed fact-checking. Now make it flow like one story that a
+curious 12-year-old enjoys from start to end: natural transitions between sentences and scenes,
+simpler words, varied sentence openings, technical terms explained simply.
+Keep every fact, number and name exactly as it is, keep each sentence's source_quotes
+unchanged, add no new facts, and keep the same segments in the same order. Return the full
+script JSON."""
 
 
 class ScriptError(RuntimeError):
@@ -251,6 +292,10 @@ class ScriptWriter:
     def rewrite_segment(self, script: Script, seg_id: str, problems: list[str]) -> Script:
         """Targeted rewrite of one failing segment; the rest of the script stays as it is."""
         role = "hook" if seg_id == "hook" else "outro" if seg_id == "outro" else "scene"
+        segs = script.segments
+        idx = next(i for i, x in enumerate(segs) if x.id == seg_id)
+        before = segs[idx - 1].narration if idx > 0 else "(the start of the video)"
+        after = segs[idx + 1].narration if idx + 1 < len(segs) else "(the end of the video)"
         messages = [
             *self.base,
             {"role": "assistant", "content": script_to_json(script)},
@@ -260,6 +305,8 @@ class ScriptWriter:
                     seg_id=seg_id,
                     problems="\n- ".join(problems[:8]) or "unsupported",
                     role=ROLE_HINTS[role],
+                    before=before,
+                    after=after,
                 ),
             },
         ]
@@ -269,6 +316,22 @@ class ScriptWriter:
         new = to_segment(raw, "title" if role != "scene" else None)
         log.info("rewrote %s: %s", seg_id, new.narration)
         return replace_segment(script, seg_id, new)
+
+    def polish(self, script: Script) -> Script:
+        """Editing pass for flow and plain language. The result must be re-verified."""
+        messages = [
+            *self.base,
+            {"role": "assistant", "content": script_to_json(script)},
+            {"role": "user", "content": POLISH_PROMPT},
+        ]
+        raw = self.llm.structured(
+            messages, LLMScript, model=self.model, retries=self.cfg.max_json_retries
+        )
+        polished = to_script(raw)
+        if len(polished.scenes) != len(script.scenes):
+            log.info("polish changed the number of scenes; keeping the original")
+            return script
+        return polished
 
     def top_up(
         self, script: Script, avoid: list[str] | None = None, target_words: int | None = None
@@ -302,10 +365,12 @@ class ScriptWriter:
             more = self.llm.structured(
                 messages, LLMMoreScenes, model=self.model, retries=self.cfg.max_json_retries
             )
-            new = [s for s in (to_segment(x) for x in more.scenes) if not _repeats(s, script)][
-                :room
-            ]
-            script.scenes.extend(new)
+            new = [(x.insert_after.strip().lower(), to_segment(x)) for x in more.scenes]
+            new = [(after, seg) for after, seg in new if not _repeats(seg, script)][:room]
+            for after, seg in new:
+                ids = [x.id for x in script.scenes]  # new scenes have no id yet
+                pos = 0 if after == "hook" else ids.index(after) + 1 if after in ids else len(ids)
+                script.scenes.insert(pos, seg)
             script.assign_ids()
             log.info(
                 "top-up: +%d scenes, now %d words (budget %d)",
@@ -344,6 +409,7 @@ def script_to_json(script: Script) -> str:
 
     def seg(s: Segment) -> dict:
         return {
+            "id": s.id,
             "sentences": [
                 {
                     "text": t,
@@ -358,6 +424,7 @@ def script_to_json(script: Script) -> str:
 
     return json.dumps(
         {
+            "story_plan": [],
             "title": script.title,
             "hook": seg(script.hook),
             "scenes": [seg(s) for s in script.scenes],

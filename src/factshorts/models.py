@@ -216,6 +216,7 @@ class SceneVisual(BaseModel):
     seed: int = 0
     image: str | None = None  # file name in work/<job>/visuals
     clip: str | None = None  # background clip with exactly `frames` frames
+    review: str = ""  # vision check outcome, e.g. "ok", "redrawn 1x", "fallback: ..."
 
 
 class VisualsPlan(BaseModel):

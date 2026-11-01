@@ -15,7 +15,7 @@ import pytest
 from PIL import Image
 
 from factshorts.config import Config
-from factshorts.core.script import LLMScript, LLMSegment, LLMSentence
+from factshorts.core.script import LLMNewScene, LLMScript, LLMSegment, LLMSentence
 from factshorts.core.tts import SpokenWord, SynthResult
 from factshorts.db import Database
 from factshorts.models import Script, SourceDoc
@@ -52,6 +52,7 @@ def cfg(tmp_path: Path) -> Config:
     c.visuals.mode = "off"  # AI visuals are tested separately with fake models
     c.visuals.device = "cpu"
     c.script.max_topups = 0
+    c.script.polish = False  # the editing pass has its own test
     c.ensure_dirs()
     return c
 
@@ -87,6 +88,7 @@ def script_to_llm(script: Script) -> LLMScript:
         return LLMSegment(sentences=sentences, on_screen_text=s.on_screen_text, visual=s.visual)
 
     return LLMScript(
+        story_plan=["the question", "the explanation", "the payoff"],
         title=script.title,
         hook=seg(script.hook),
         scenes=[seg(s) for s in script.scenes],
@@ -143,10 +145,15 @@ NEW_FACTS = [  # (narration, quote) pairs from the fixture article not used by t
 ]
 
 
-def new_fact_scenes(start: int = 0, count: int = 2) -> list[LLMSegment]:
+def as_new(seg: LLMSegment, after: str = "") -> LLMNewScene:
+    return LLMNewScene(**seg.model_dump(), insert_after=after)
+
+
+def new_fact_scenes(start: int = 0, count: int = 2, after: str = "") -> list[LLMNewScene]:
     """Top-up scenes with facts the fixture script does not use yet."""
     return [
-        LLMSegment(
+        LLMNewScene(
+            insert_after=after,
             sentences=[LLMSentence(text=t, source_quotes=[q], claim_type="number")],
             on_screen_text="",
             visual="big_number",
