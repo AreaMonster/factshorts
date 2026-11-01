@@ -166,7 +166,7 @@ def test_unfixable_picture_falls_back_to_plain_subject(
     plan, _gen = _build(cfg, script, tmp_path, FakeReviewer("ringed", fixable=False))
     s1 = next(s for s in plan.scenes if s.segment_id == "s1")
     assert s1.review.startswith("fallback: shows rings")
-    assert s1.prompt.startswith("a calm, simple wide landscape")  # no subject look known
+    assert "calm, simple landscape" in s1.prompt  # no subject look known
 
 
 def test_hook_that_keeps_failing_is_replaced_by_first_scene(
@@ -260,3 +260,72 @@ def test_dedupe_removes_repeats_and_fact_free_scenes(script: Script) -> None:
     assert texts.count(script.scenes[0].narration) == 1
     assert len(out.scenes) == len(script.scenes)
     assert out.outro.narration == script.outro.narration
+
+
+def test_similar_shots_are_detected() -> None:
+    from factshorts.core.art import similar_shots
+
+    def shot(sid: str, prompt: str) -> Shot:
+        return Shot(
+            segment_id=sid, image_prompt=prompt, shows_subject=True, motion="m", visual_interest=2
+        )
+
+    shots = {
+        "s1": shot("s1", "a pale yellow planet wrapped in thick clouds against a dark sky"),
+        "s2": shot("s2", "a pale yellow planet wrapped in thick clouds against a starry dark sky"),
+        "s3": shot("s3", "a rocky volcanic plain under an orange hazy sky, low angle"),
+    }
+    assert similar_shots(shots) == [("s1", "s2")]
+
+
+def test_each_segment_gets_a_different_framing(script: Script) -> None:
+    shots = ShotList(
+        subject_look="a snowy peak",
+        shots=[
+            Shot(
+                segment_id=s.id,
+                image_prompt=f"scene {i}: {'x ' * i}",
+                shows_subject=False,
+                motion="m",
+                visual_interest=2,
+            )
+            for i, s in enumerate(script.segments)
+        ],
+    )
+    llm = FakeLLM({"ShotList": [shots]})
+    plan_shots(script, llm, "m", "flat art")
+    prompt = llm.calls[0][1][0]["content"]
+    framings = [
+        line.split("(framing: ")[1].split(")")[0]
+        for line in prompt.splitlines()
+        if "(framing: " in line
+    ]
+    assert len(framings) == len(script.segments)
+    assert len(set(framings)) == len(framings)
+
+
+@needs_ffmpeg
+def test_fallback_pictures_differ(cfg: Config, script: Script, tmp_path) -> None:
+    from factshorts.core.tts import build_audio
+
+    cfg.render.width, cfg.render.height = 90, 160
+    cfg.visuals.mode = "kenburns"
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    audio = build_audio(script, FakeSynth(), cfg.tts, audio_dir, tmp_path)
+    for seg in script.segments:
+        seg.image_prompt = "a ringed planet"  # every picture keeps failing
+    builder = VisualBuilder(
+        cfg,
+        load_theme("default"),
+        image_gen=FakeImageGen(),
+        depth=FakeDepth(),
+        motion=FakeMotion(),
+        reviewer=FakeReviewer("ringed", fixable=False),
+    )
+    out = tmp_path / "visuals"
+    out.mkdir()
+    plan = builder.build("job", script, audio, out, None, lambda: None, lambda m: None)
+    prompts = [s.prompt for s in plan.scenes]
+    assert all(s.review.startswith("fallback") for s in plan.scenes)
+    assert len(set(prompts[:4])) == 4  # four different framings before they repeat

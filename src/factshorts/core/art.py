@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
+from rapidfuzz import fuzz
 
 from factshorts.core.llm import LLM
 from factshorts.models import Script
@@ -62,7 +63,11 @@ RULES
 - Only show what the narration states plus obviously generic surroundings (sky, clouds, stars,
   snow, sea). Do not invent details that could be wrong (plants, buildings, rings, moons,
   weather, seasons, animals) unless the narration or SOURCE CONTEXT mentions them.
-- Vary the camera between segments: wide shot, close-up, aerial view, low angle, side view.
+- VARIETY: viewers must never see the same picture twice. Use each segment's suggested
+  framing. Show the whole main subject in at most a third of the shots; in the others show
+  what the sentence is about: a detail, the surface or landscape, the sky or atmosphere seen
+  from inside, light and distance, or an object the narration mentions. No two image_prompts
+  may describe the same composition.
 - image_prompt: 25-45 words. motion: 3-8 words of gentle movement. visual_interest 1-5.
 Return one shot per segment, using the segment ids given.
 
@@ -97,8 +102,21 @@ Describe briefly what the picture shows. Then list only CLEAR problems:
 - realistic depictions of identifiable people;
 - something that plainly contradicts the narration.
 Do NOT count as problems: the flat cartoon style, simplification, exact color shades, missing
-details, or a general picture for a sentence without facts (such as "Thanks for watching!").
+details, the size, position, distance or framing of the subject, or a general picture for a
+sentence without facts (such as "Thanks for watching!").
 matches = true when there are no clear problems."""
+
+# Suggested framing per segment, rotated so consecutive shots look different.
+FRAMINGS = [
+    "a wide establishing view",
+    "a close-up of one detail the sentence is about",
+    "a view from the ground or surface looking up",
+    "seen from far away, the main subject small in the frame",
+    "a view from inside the scene (inside the clouds, on the surface, in the landscape)",
+    "an aerial view looking down",
+    "a dramatic low-angle view",
+    "an abstract close-up of textures and light",
+]
 
 BANNED = re.compile(
     r"\d|[\"“”]|\b(text|texts|label|labels|labeled|labelled|letter|letters|number|"
@@ -131,6 +149,17 @@ def _strip_names(prompt: str, names: set[str]) -> str:
     return prompt
 
 
+def similar_shots(shots: dict[str, Shot], threshold: float = 80) -> list[tuple[str, str]]:
+    """Pairs of shots whose prompts describe nearly the same picture."""
+    items = list(shots.items())
+    return [
+        (a, b)
+        for i, (a, sa) in enumerate(items)
+        for b, sb in items[i + 1 :]
+        if fuzz.token_set_ratio(sa.image_prompt, sb.image_prompt) >= threshold
+    ]
+
+
 def compose_prompt(image_prompt: str, shows_subject: bool, subject_look: str) -> str:
     if shows_subject and subject_look:
         return f"{image_prompt.rstrip('. ')}. The main subject: {subject_look}"
@@ -150,7 +179,10 @@ def plan_shots(
     Returns the script and the subject's look. `names` (e.g. the article title's words) must not
     appear in prompts: the image model would guess what they look like."""
     names = {n for n in (names or set()) if len(n) > 2}
-    segments = "\n".join(f"[{s.id}] {s.narration}" for s in script.segments)
+    segments = "\n".join(
+        f"[{s.id}] (framing: {FRAMINGS[i % len(FRAMINGS)]}) {s.narration}"
+        for i, s in enumerate(script.segments)
+    )
     messages = [
         {
             "role": "user",
@@ -172,7 +204,8 @@ def plan_shots(
         issues = {sid: problems_in(s.image_prompt, names) for sid, s in shots.items()}
         issues = {sid: p for sid, p in issues.items() if p}
         missing = [s.id for s in script.segments if s.id not in shots]
-        if not issues and not missing:
+        alike = similar_shots(shots)
+        if not issues and not missing and not alike:
             break
         log.info("shot list attempt %d: problems %s, missing %s", attempt, issues, missing)
         feedback = []
@@ -184,6 +217,11 @@ def plan_shots(
             )
         if missing:
             feedback.append(f"Missing segments: {', '.join(missing)}")
+        if alike:
+            feedback.append(
+                "These shots look almost the same; make each one a different picture: "
+                + "; ".join(f"{a} and {b}" for a, b in alike)
+            )
         messages = [
             *messages[:1],
             {"role": "assistant", "content": result.model_dump_json()},

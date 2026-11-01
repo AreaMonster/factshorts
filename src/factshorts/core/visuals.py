@@ -54,6 +54,15 @@ def choose_kinds(script: Script, mode: str, wan_scenes: int, include_hook: bool)
     return {i: ("wan" if i in chosen else "parallax") for i in ids}
 
 
+# Plain but different pictures for scenes whose drawings kept failing the check.
+FALLBACK_FRAMINGS = [
+    "the main subject seen from far away, small in a wide sky",
+    "a close-up of the main subject's surface texture",
+    "the main subject partly hidden behind soft clouds, seen from the side",
+    "a calm horizon with the main subject low in the sky",
+]
+
+
 def _key(*parts: object) -> str:
     return hashlib.sha256("|".join(map(str, parts)).encode()).hexdigest()[:24]
 
@@ -245,13 +254,13 @@ class VisualBuilder:
                     break
                 if rnd == self.v.max_redraws:
                     # Out of redraws: fall back to a plain picture of the subject.
-                    for s, verdict in failing:
+                    for k, (s, verdict) in enumerate(failing):
                         s.review = "fallback: " + "; ".join(verdict.problems)[:300]
+                        framing = FALLBACK_FRAMINGS[k % len(FALLBACK_FRAMINGS)]
                         plain = (
-                            f"a simple, calm picture of the main subject, centered. "
-                            f"The main subject: {self.look}"
+                            f"{framing}, simple and calm. The main subject: {self.look}"
                             if self.look
-                            else "a calm, simple wide landscape under a soft sky"
+                            else f"{framing} of a calm, simple landscape under a soft sky"
                         )
                         s.prompt, s.seed = f"{plain}. {style}", s.seed + 1000
                     unload_llm()
