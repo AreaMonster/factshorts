@@ -360,8 +360,32 @@ def extract_entities(text: str, vocab: Vocab, titlecase: bool = False) -> Entity
     )
 
 
+# Short forms on screen that sources usually spell out (and vice versa).
+NAME_ALIASES: dict[str, list[str]] = {
+    "co2": ["carbon dioxide"],
+    "h2o": ["water"],
+    "o2": ["oxygen"],
+    "n2": ["nitrogen"],
+    "ch4": ["methane"],
+    "h2so4": ["sulfuric acid", "sulphuric acid"],
+    "so2": ["sulfur dioxide"],
+    "us": ["united states"],
+    "usa": ["united states"],
+    "uk": ["united kingdom"],
+    "un": ["united nations"],
+    "eu": ["european union"],
+    "ussr": ["soviet union"],
+}
+
+
+def _contains(term: str, evidence_folded: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(fold(term))}(?!\w)", evidence_folded) is not None
+
+
 def name_in_evidence(name: str, evidence: str) -> bool:
-    return re.search(rf"(?<!\w){re.escape(fold(name))}(?!\w)", fold(evidence)) is not None
+    ev = fold(evidence)
+    key = fold(name).replace("₂", "2")  # CO₂ → co2
+    return _contains(name, ev) or any(_contains(a, ev) for a in NAME_ALIASES.get(key, []))
 
 
 def quantity_matches(

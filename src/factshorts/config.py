@@ -30,7 +30,7 @@ class GeneralConfig(_Section):
 class OllamaConfig(_Section):
     url: str = "http://127.0.0.1:11434"
     writer_model: str = "qwen3:14b"
-    judge_model: str = "llama3.1:8b"
+    judge_model: str = "gemma4:26b"
     temperature: float = 0.4
     num_ctx: int = 12288
     timeout_s: float = 600
@@ -75,6 +75,49 @@ class ScriptConfig(_Section):
     max_source_words: int = 4000
 
 
+class WikidataProperty(_Section):
+    label: str
+    keywords: list[str]
+
+
+DEFAULT_WIKIDATA_PROPERTIES = {
+    "P2044": WikidataProperty(
+        label="elevation above sea level",
+        keywords=["tall", "high", "height", "elevation", "altitude", "above sea level", "summit"],
+    ),
+    "P2048": WikidataProperty(label="height", keywords=["tall", "high", "height"]),
+    "P2043": WikidataProperty(label="length", keywords=["long", "length"]),
+    "P2049": WikidataProperty(label="width", keywords=["wide", "width"]),
+    "P2386": WikidataProperty(label="diameter", keywords=["diameter", "across"]),
+    "P2120": WikidataProperty(label="radius", keywords=["radius"]),
+    "P4511": WikidataProperty(label="vertical depth", keywords=["deep", "depth"]),
+    "P2046": WikidataProperty(label="area", keywords=["area", "covers", "square"]),
+    "P1082": WikidataProperty(
+        label="population", keywords=["population", "inhabitants", "residents", "people live"]
+    ),
+    "P2067": WikidataProperty(label="mass", keywords=["weigh", "weight", "mass", "heavy"]),
+    "P2583": WikidataProperty(
+        label="distance from Earth", keywords=["from earth", "away from earth", "away from us"]
+    ),
+    "P571": WikidataProperty(
+        label="inception",
+        keywords=[
+            "founded",
+            "built",
+            "established",
+            "created",
+            "formed",
+            "constructed",
+            "completed",
+        ],
+    ),
+    "P569": WikidataProperty(label="date of birth", keywords=["born", "birth"]),
+    "P570": WikidataProperty(label="date of death", keywords=["died", "death"]),
+    "P575": WikidataProperty(label="time of discovery", keywords=["discovered", "discovery"]),
+    "P1619": WikidataProperty(label="date of official opening", keywords=["opened"]),
+}
+
+
 class VerificationConfig(_Section):
     quote_check: bool = True
     entity_check: bool = True
@@ -83,8 +126,16 @@ class VerificationConfig(_Section):
     llm_judge: bool = True
     max_rounding_error: float = 0.05
     conversion_tolerance: float = 0.005
+    # Rounds of targeted scene rewrites before a failing scene is dropped (or the idea rejected).
+    max_rewrite_rounds: int = 3
     max_script_attempts: int = 3
     require_review: bool = True
+    nli_model: str = "MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli"
+    nli_device: str = "cpu"
+    nli_threshold: float = 0.5
+    wikidata_properties: dict[str, WikidataProperty] = Field(
+        default_factory=lambda: dict(DEFAULT_WIKIDATA_PROPERTIES)
+    )
 
 
 class TTSConfig(_Section):

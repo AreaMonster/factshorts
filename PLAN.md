@@ -254,3 +254,20 @@ videos too short to monetize. Decisions:
    GPU models run one at a time (unload Ollama's model before image/video generation).
 4. Export: "AI illustrations" note in description; models and prompts recorded in sources.json.
 Then Phase 2 (full verification) as planned.
+
+## 10. Phase 2 decisions
+
+- **Judge model: `gemma4:26b`** (already installed, Google family, different from the qwen
+  writer). On a 10-claim labeled Everest set it was right on every case, while `llama3.1:8b`
+  passed "Over 300 bodies remain" against a source saying 200. ~60 s one-time load, then
+  ~2-8 s per claim.
+- **NLI alone is not enough:** with the paragraph as premise, DeBERTa-v3-large passed
+  "tallest from base to summit" (source: "highest above sea level") at 0.88-0.99. The judge
+  caught it. All checks must pass, which is what the spec requires.
+- **Rewrite loop:** failing segments get up to 3 targeted rewrites (only that segment is
+  regenerated, with the exact failures as feedback); scenes that still fail are dropped if at
+  least `min_scenes` remain, otherwise the idea is rejected with the reasons. Then the script
+  is topped up with new, non-repeating scenes that must pass all checks too.
+- **Found in the Venus sample:** comparison ideas ("Venus vs Mercury") need *both* articles.
+  With only "Venus", every Mercury fact the writer added from memory was (correctly) rejected.
+  → Phase 3 sourcing should fetch one article per compared subject.

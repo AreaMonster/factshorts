@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,14 @@ needs_ffmpeg = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_send = httpx.Client.send
+    allow_local = os.environ.get("FACTSHORTS_MODEL_TESTS") == "1"  # opt-in: local Ollama only
+    if allow_local:
+        monkeypatch.setenv("HF_HUB_OFFLINE", "1")  # models must already be in the local cache
+
     def blocked(self: Any, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        if allow_local and request.url.host in ("127.0.0.1", "localhost"):
+            return real_send(self, request, **kwargs)
         raise RuntimeError(f"network access in tests: {request.url}")
 
     monkeypatch.setattr(httpx.Client, "send", blocked)
@@ -86,6 +94,67 @@ def script_to_llm(script: Script) -> LLMScript:
     )
 
 
+# The judge agrees by default; tests that exercise the judge queue their own answers.
+JUDGE_DEFAULTS = {
+    "ClaimJudgement": {"reason": "stated in the excerpt", "verdict": "SUPPORTED"},
+    "FillerJudgement": {"reason": "a transition", "states_a_fact": False},
+}
+
+
+class FakeNLI:
+    """Entailment by word overlap: good enough to tell matching claims from unrelated ones."""
+
+    def __init__(self, fail_on: tuple[str, ...] = ()) -> None:
+        self.fail_on = fail_on
+        self.calls = 0
+
+    def scores(self, premise: str, hypothesis: str) -> dict[str, float]:
+        self.calls += 1
+        if any(f in hypothesis for f in self.fail_on):
+            return {"entailment": 0.02, "neutral": 0.08, "contradiction": 0.9}
+        return {"entailment": 0.95, "neutral": 0.04, "contradiction": 0.01}
+
+
+class FakeWikidata:
+    def __init__(self, values: dict | None = None) -> None:
+        self.values = values or {}
+
+    def statements(self, qid: str, properties: list[str]) -> dict:
+        return {k: v for k, v in self.values.items() if k in properties}
+
+
+NEW_FACTS = [  # (narration, quote) pairs from the fixture article not used by the script
+    (
+        "About 35,000 people visit the park every year.",
+        "Around 35,000 people visit the Testa National Park each year.",
+    ),
+    (
+        "A cable car built in 1987 climbs to 3,100 meters.",
+        "A cable car built in 1987 carries visitors to a viewing platform at 3,100 m.",
+    ),
+    (
+        "Winds above 150 km/h are common on the north face.",
+        "Winds above 150 km/h are common on the north face.",
+    ),
+    (
+        "The town of Velden gets about 1,200 mm of rain a year.",
+        "The nearby town of Velden receives about 1,200 mm of rain per year.",
+    ),
+]
+
+
+def new_fact_scenes(start: int = 0, count: int = 2) -> list[LLMSegment]:
+    """Top-up scenes with facts the fixture script does not use yet."""
+    return [
+        LLMSegment(
+            sentences=[LLMSentence(text=t, source_quotes=[q], claim_type="number")],
+            on_screen_text="",
+            visual="big_number",
+        )
+        for t, q in NEW_FACTS[start : start + count]
+    ]
+
+
 class FakeLLM:
     """Returns queued responses per schema name; records every call."""
 
@@ -95,6 +164,8 @@ class FakeLLM:
 
     def structured(self, messages, schema, model=None, retries=3, temperature=None):
         self.calls.append((schema.__name__, messages))
+        if schema.__name__ not in self.responses and schema.__name__ in JUDGE_DEFAULTS:
+            return schema.model_validate(JUDGE_DEFAULTS[schema.__name__])
         queue = self.responses[schema.__name__]
         item = queue.pop(0) if len(queue) > 1 else queue[0]
         return item if isinstance(item, schema) else schema.model_validate(item)

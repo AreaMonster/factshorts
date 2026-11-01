@@ -175,7 +175,14 @@ class SegmentPainter:
         font = self.theme.body_font(int(34 * self.s), self.theme.fonts.small_weight)
         lines = [self.spec.source_label, "Text: CC BY-SA 4.0"]
         line_h = int(sum(font.getmetrics()) * 1.3)
-        return _text_layer(lines, font, line_h, self.theme.colors.rgb("muted"), shadow=False)
+        text = _text_layer(lines, font, line_h, (235, 235, 245), shadow=False)
+        # Dark rounded backing so the credit stays readable over any illustration.
+        card = Image.new("RGBA", text.size, (0, 0, 0, 0))
+        ImageDraw.Draw(card).rounded_rectangle(
+            (0, 0, text.width - 1, text.height - 1), radius=int(24 * self.s), fill=(10, 12, 20, 170)
+        )
+        card.alpha_composite(text)
+        return card
 
     def _caption_layer(self, chunk_i: int, active: int) -> Image.Image:
         key = (chunk_i, active)

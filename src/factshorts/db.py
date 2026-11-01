@@ -151,6 +151,12 @@ class Database:
                 (status, now, error, job_id, step),
             )
 
+    def set_step_hash(self, job_id: str, step: str, input_hash: str) -> None:
+        self.execute(
+            "UPDATE job_steps SET input_hash = ? WHERE job_id = ? AND step = ?",
+            (input_hash, job_id, step),
+        )
+
     def add_rejection(self, idea: str, reason: str, job_id: str | None, step: str | None) -> None:
         self.execute(
             "INSERT INTO rejections (job_id, idea, step, reason, created_at)"

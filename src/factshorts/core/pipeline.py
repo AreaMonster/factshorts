@@ -34,8 +34,11 @@ from factshorts.models import (
 from factshorts.render import ffmpeg
 from factshorts.render.renderer import render_video
 from factshorts.render.themes import Theme, load_theme
+from factshorts.sources.wikidata import Wikidata
 from factshorts.sources.wikipedia import Wikipedia
-from factshorts.verify.aggregate import verify_script
+from factshorts.verify.aggregate import Verifier
+from factshorts.verify.llm_judge import Judge
+from factshorts.verify.nli import NLIModel, TransformersNLI
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +66,15 @@ class Services:
     wiki: Wikipedia | None = None
     synth_factory: Callable[[], Synthesizer] | None = None
     visuals_factory: Callable[[Theme], VisualBuilder] | None = None
+    nli_factory: Callable[[], NLIModel] | None = None
+    wikidata: Wikidata | None = None
     _synth: Synthesizer | None = field(default=None, init=False)
+    _nli: NLIModel | None = field(default=None, init=False)
+
+    def nli(self) -> NLIModel | None:
+        if self._nli is None and self.nli_factory is not None:
+            self._nli = self.nli_factory()
+        return self._nli
 
     def release_synth(self) -> None:
         if self._synth is not None:
@@ -90,6 +101,10 @@ def default_services(cfg: Config, db: Database) -> Services:
         wiki=Wikipedia(http, cfg.wikipedia),
         synth_factory=lambda: make_synth(cfg.tts, cfg.models_dir),
         visuals_factory=lambda theme: VisualBuilder(cfg, theme),
+        nli_factory=lambda: TransformersNLI(
+            cfg.verification.nli_model, cfg.verification.nli_device
+        ),
+        wikidata=Wikidata(http),
     )
 
 
@@ -98,6 +113,8 @@ class Pipeline:
         self.cfg = cfg
         self.db = db
         self.services = services or default_services(cfg, db)
+        self._verifier_for: Path | None = None
+        self._verifier_cache: Verifier | None = None
 
     def create_job(self, idea: Idea) -> str:
         job_id = new_job_id()
@@ -128,6 +145,9 @@ class Pipeline:
                     log.info("[%s] step %s started", job_id, step)
                     getattr(self, f"_step_{step}")(job_id, idea, wd, notify)
                     self.db.set_step(job_id, step, "done")
+                    # Steps may rewrite their own inputs (verification rewrites script.json),
+                    # so the fingerprint that counts for resuming is the one after the step.
+                    self.db.set_step_hash(job_id, step, self._input_hash(wd, step))
                     log.info("[%s] step %s done", job_id, step)
             except (Rejected, SourcingError) as exc:
                 reason = str(exc)
@@ -207,6 +227,32 @@ class Pipeline:
         wd.write_model("script.json", script)
         return script
 
+    # --- verification ----------------------------------------------------------
+
+    def _verifier(self, wd: WorkDir) -> Verifier:
+        """One verifier per job run, so claim results are cached across rewrites."""
+        if self._verifier_for == wd.root and self._verifier_cache is not None:
+            return self._verifier_cache
+        source = wd.read_model("source.json", SourceDoc)
+        vcfg = self.cfg.verification
+        values = None
+        if vcfg.wikidata_check and self.services.wikidata and source.wikidata_id:
+            try:
+                values = self.services.wikidata.statements(
+                    source.wikidata_id, list(vcfg.wikidata_properties)
+                )
+            except Exception as exc:  # network problems must not pass silently
+                log.warning("Wikidata unavailable: %s", exc)
+        elif vcfg.wikidata_check and not source.wikidata_id:
+            values = {}  # no Wikidata item: the check does not apply
+        judge = None
+        if vcfg.llm_judge and self.services.llm is not None:
+            judge = Judge(self.services.llm, self.cfg.ollama.judge_model)
+        nli = self.services.nli() if vcfg.nli_check else None
+        self._verifier_cache = Verifier(vcfg, source, nli=nli, judge=judge, wikidata_values=values)
+        self._verifier_for = wd.root
+        return self._verifier_cache
+
     def _step_verification(self, job_id: str, idea: Idea, wd: WorkDir, notify: ProgressFn) -> None:
         assert self.services.llm is not None
         source = wd.read_model("source.json", SourceDoc)
@@ -219,40 +265,82 @@ class Pipeline:
             self.cfg.script,
             self.cfg.tts,
         )
-        attempts = self.cfg.verification.max_script_attempts
-        for attempt in range(1, attempts + 1):
-            result = verify_script(script, source, self.cfg.verification, attempt=attempt)
-            wd.write_model(f"verification_attempt{attempt}.json", result)
+        verifier = self._verifier(wd)
+        n = 1
+        result = verifier.verify(script, attempt=n)
+        wd.write_model(f"verification_attempt{n}.json", result)
+        title_fallbacks = [idea.text, source.title]
+
+        # 1. Targeted rewrites of failing segments (max_rewrite_rounds).
+        for rnd in range(1, self.cfg.verification.max_rewrite_rounds + 1):
             if result.passed:
-                wd.write_model("verification.json", result)
-                notify(
-                    "verification",
-                    f"passed: {len(result.claims)} claims, "
-                    f"{script.word_count()} words, attempt {attempt}",
-                )
-                return
-            notify("verification", f"attempt {attempt} failed: {len(result.failures)} problems")
-            for f in result.failures:
-                log.info("  - %s", f)
-            if attempt == attempts:
                 break
             failed = failed_segments(result)
-            scene_ids = {s.id for s in script.scenes}
-            keep = [s for s in script.scenes if s.id not in failed]
-            if failed <= scene_ids and len(keep) >= self.cfg.script.min_scenes:
-                # Only scenes failed: drop them and add new scenes with other facts.
-                avoid = [s.narration for s in script.scenes if s.id in failed]
-                script.scenes = keep
-                script.assign_ids()
-                notify("verification", f"dropped {len(failed)} failing scene(s), adding new ones")
-                script = writer.top_up(script, avoid=avoid)
-            else:
-                notify("verification", "regenerating the script with the failures as feedback")
-                script = writer.draft(feedback=result.failures)
-            wd.write_model("script.json", script)
-        raise Rejected(
-            f"fact-check failed after {attempts} attempts: " + "; ".join(result.failures[:5])
+            notify(
+                "verification",
+                f"round {rnd}: {len(result.failures)} problem(s); "
+                f"rewriting {', '.join(sorted(failed))}",
+            )
+            for f in result.failures:
+                log.info("  - %s", f)
+            if "title" in failed and title_fallbacks:
+                script.title = title_fallbacks.pop(0)
+            for seg_id in sorted(failed - {"title"}):
+                problems = [f for f in result.failures if f.startswith(f"{seg_id} ")]
+                script = writer.rewrite_segment(script, seg_id, problems)
+            n += 1
+            result = verifier.verify(script, attempt=n)
+            wd.write_model(f"verification_attempt{n}.json", result)
+
+        # 2. Scenes that still fail are dropped if the video stays coherent.
+        if not result.passed:
+            script, result, n = self._drop_failing(script, result, verifier, wd, n, notify)
+
+        # 3. Top up if dropping made the video too short; new scenes must pass as well.
+        if script.word_count() < writer.budget * 0.9 and self.cfg.script.max_topups:
+            before = len(script.scenes)
+            script = writer.top_up(script)
+            if len(script.scenes) > before:
+                n += 1
+                result = verifier.verify(script, attempt=n)
+                if not result.passed:
+                    script, result, n = self._drop_failing(script, result, verifier, wd, n, notify)
+        wd.write_model("script.json", script)
+        wd.write_model("verification.json", result)
+        notify(
+            "verification",
+            f"passed: {len(result.claims)} claims, {script.word_count()} words ({result.label})",
         )
+
+    def _drop_failing(
+        self,
+        script: Script,
+        result: Verification,
+        verifier: Verifier,
+        wd: WorkDir,
+        n: int,
+        notify: ProgressFn,
+    ) -> tuple[Script, Verification, int]:
+        failed = failed_segments(result)
+        scene_ids = {s.id for s in script.scenes}
+        keep = [s for s in script.scenes if s.id not in failed]
+        if not failed <= scene_ids or len(keep) < self.cfg.script.min_scenes:
+            wd.write_model("script.json", script)
+            raise Rejected(
+                "fact-check failed after targeted rewrites: " + "; ".join(result.failures[:5])
+            )
+        notify(
+            "verification",
+            f"dropping {len(failed)} scene(s) that still fail: {', '.join(sorted(failed))}",
+        )
+        script.scenes = keep
+        script.assign_ids()
+        n += 1
+        result = verifier.verify(script, attempt=n)
+        wd.write_model(f"verification_attempt{n}.json", result)
+        if not result.passed:
+            raise Rejected("fact-check failed: " + "; ".join(result.failures[:5]))
+        return script, result, n
 
     def _step_voice(self, job_id: str, idea: Idea, wd: WorkDir, notify: ProgressFn) -> None:
         script = wd.read_model("script.json", Script)
@@ -298,7 +386,8 @@ class Pipeline:
         before = {s.id for s in script.scenes}
         extra_words = int(seconds * self.cfg.script.words_per_minute / 60)
         script = writer.top_up(script, target_words=script.word_count() + extra_words)
-        result = verify_script(script, source, self.cfg.verification)
+        verifier = self._verifier(wd)
+        result = verifier.verify(script)
         failed = failed_segments(result)
         if failed:
             kept = [s for s in script.scenes if s.id not in failed or s.id in before]
@@ -308,13 +397,16 @@ class Pipeline:
             )
             script.scenes = kept
             script.assign_ids()
-            result = verify_script(script, source, self.cfg.verification)
+            result = verifier.verify(script)
         if not result.passed:
             raise Rejected(
                 "extended script failed fact-checking: " + "; ".join(result.failures[:5])
             )
         wd.write_model("script.json", script)
         wd.write_model("verification.json", result)
+        # Verification now reflects the extended script; keep it from re-running on resume.
+        job_id = wd.root.name
+        self.db.set_step_hash(job_id, "verification", self._input_hash(wd, "verification"))
         return script
 
     def _step_visuals(self, job_id: str, idea: Idea, wd: WorkDir, notify: ProgressFn) -> None:

@@ -17,13 +17,20 @@ from conftest import (
     FakeSynth,
     FakeWiki,
     needs_ffmpeg,
+    new_fact_scenes,
     script_to_llm,
 )
 from factshorts.config import Config
 from factshorts.core.art import Shot, ShotList, plan_shots, problems_in, sanitize
 from factshorts.core.captions import align_word_timings
 from factshorts.core.pipeline import Pipeline, Services
-from factshorts.core.script import LLMMoreScenes, ScriptWriter, target_scenes, word_budget
+from factshorts.core.script import (
+    LLMMoreScenes,
+    ScriptWriter,
+    target_scenes,
+    to_segment,
+    word_budget,
+)
 from factshorts.core.sourcing import ArticleGuess
 from factshorts.core.visuals import VisualBuilder, choose_kinds
 from factshorts.db import Database
@@ -86,7 +93,7 @@ def test_short_draft_is_topped_up_with_new_scenes(
     cfg: Config, source: SourceDoc, script: Script
 ) -> None:
     cfg.script.max_topups = 2
-    extra = script_to_llm(script).scenes[:2]
+    extra = new_fact_scenes(0, 2)
     llm = FakeLLM(
         {"LLMScript": [script_to_llm(script)], "LLMMoreScenes": [LLMMoreScenes(scenes=extra)]}
     )
@@ -271,32 +278,65 @@ def test_pipeline_with_hybrid_ai_visuals(
     assert builder.image_gen.prompts == [] and builder.motion.calls == 0
 
 
-def test_verification_drops_failing_scene_and_tops_up(
-    cfg: Config, db: Database, source: SourceDoc, script: Script
-) -> None:
-    cfg.script.max_topups = 1
+def _bad_s1(script: Script) -> Script:
     bad = script.model_copy(deep=True)
     bad.scenes[0].narration = "Its summit rises 7,777 meters above sea level."
     bad.scenes[0].claims[0].text = bad.scenes[0].narration
-    replacement = script_to_llm(script).scenes[0]  # the correct version of that scene
+    return bad
+
+
+def test_failing_scene_is_fixed_by_targeted_rewrite(
+    cfg: Config, db: Database, source: SourceDoc, script: Script
+) -> None:
+    bad = _bad_s1(script)
     llm = FakeLLM(
         {
             "ArticleGuess": [ArticleGuess(article_title=source.title, search_query=source.title)],
             "LLMScript": [script_to_llm(bad)],
-            "LLMMoreScenes": [LLMMoreScenes(scenes=[replacement])],
+            "LLMSegment": [script_to_llm(script).scenes[0]],  # the corrected scene
         }
     )
-    services = Services(llm=llm, wiki=FakeWiki(source), synth_factory=FakeSynth)
-    pipeline = Pipeline(cfg, db, services)
+    pipeline = Pipeline(cfg, db, Services(llm=llm, wiki=FakeWiki(source), synth_factory=FakeSynth))
     job_id = pipeline.create_job(Idea(text="How high is Mount Testa?", length=30))
     log: list[str] = []
     assert pipeline.run(job_id, progress=lambda s, m: log.append(m)) is not None
-    assert any("dropped 1 failing scene" in m for m in log)
+    assert any("rewriting s1" in m for m in log)
     final = Script.model_validate_json(
         (pipeline.workdir(job_id).root / "script.json").read_text("utf-8")
     )
     assert "7,777" not in " ".join(s.narration for s in final.segments)
+    assert [s.id for s in final.scenes] == [s.id for s in script.scenes]  # nothing dropped
+    assert sum(1 for name, _ in llm.calls if name == "LLMSegment") == 1
     assert sum(1 for name, _ in llm.calls if name == "LLMScript") == 1  # no full redraft
+
+
+def test_scene_that_keeps_failing_is_dropped_and_replaced(
+    cfg: Config, db: Database, source: SourceDoc, script: Script
+) -> None:
+    cfg.script.min_scenes = 3
+    cfg.script.max_topups = 1
+    bad = _bad_s1(script)
+    llm = FakeLLM(
+        {
+            "ArticleGuess": [ArticleGuess(article_title=source.title, search_query=source.title)],
+            "LLMScript": [script_to_llm(bad)],
+            "LLMSegment": [script_to_llm(bad).scenes[0]],  # rewrites never fix it
+            "LLMMoreScenes": [LLMMoreScenes(scenes=[script_to_llm(script).scenes[0]])],
+        }
+    )
+    pipeline = Pipeline(cfg, db, Services(llm=llm, wiki=FakeWiki(source), synth_factory=FakeSynth))
+    job_id = pipeline.create_job(Idea(text="How high is Mount Testa?", length=30))
+    log: list[str] = []
+    assert pipeline.run(job_id, progress=lambda s, m: log.append(m)) is not None
+    assert any("dropping 1 scene(s) that still fail: s1" in m for m in log)
+    final = Script.model_validate_json(
+        (pipeline.workdir(job_id).root / "script.json").read_text("utf-8")
+    )
+    assert "7,777" not in " ".join(s.narration for s in final.segments)
+    assert (
+        sum(1 for name, _ in llm.calls if name == "LLMSegment")
+        == cfg.verification.max_rewrite_rounds
+    )
 
 
 def test_short_narration_is_extended_to_min_duration(
@@ -304,28 +344,59 @@ def test_short_narration_is_extended_to_min_duration(
 ) -> None:
     from factshorts.core.tts import build_audio
 
-    # The draft step already tops up once (+2 scenes); require more than that gives.
-    drafted = script.model_copy(deep=True)
-    drafted.scenes += [s.model_copy(deep=True) for s in script.scenes[:2]]
+    # A budget close to the fixture's length: the draft tops up once, verification does not,
+    # so the scenes added after that come from the voice step's duration check.
+    cfg.script.words_per_minute = 78  # budget ≈ the fixture's ~67 words
+    drafted = script.model_copy(deep=True)  # the draft step tops up once (+2 scenes)
+    drafted.scenes += [to_segment(x) for x in new_fact_scenes(0, 2)]
     drafted.assign_ids()
     baseline = build_audio(drafted, FakeSynth(), cfg.tts, tmp_path, tmp_path).duration
     cfg.script.min_duration_s = baseline + 2.0
     cfg.script.max_topups = 1
-    extra = script_to_llm(script).scenes[:2]  # verifiable scenes to add
+    extra = new_fact_scenes(0, 2)  # first top-up (draft step)
     llm = FakeLLM(
         {
             "ArticleGuess": [ArticleGuess(article_title=source.title, search_query=source.title)],
             "LLMScript": [script_to_llm(script)],
-            "LLMMoreScenes": [LLMMoreScenes(scenes=extra)],
+            "LLMMoreScenes": [
+                LLMMoreScenes(scenes=extra),
+                LLMMoreScenes(scenes=new_fact_scenes(2, 2)),
+            ],  # voice step
         }
     )
     pipeline = Pipeline(cfg, db, Services(llm=llm, wiki=FakeWiki(source), synth_factory=FakeSynth))
     job_id = pipeline.create_job(Idea(text="How high is Mount Testa?", length=60))
     log: list[str] = []
     assert pipeline.run(job_id, progress=lambda s, m: log.append(m)) is not None
-    assert any("adding scenes" in m for m in log)
+    assert any("adding scenes" in m for m in log), log
     wd = pipeline.workdir(job_id).root
     audio = json.loads((wd / "audio" / "audio.json").read_text("utf-8"))
     assert audio["duration"] >= cfg.script.min_duration_s
     final = Script.model_validate_json((wd / "script.json").read_text("utf-8"))
     assert len(final.scenes) == len(script.scenes) + 4
+
+
+@needs_ffmpeg
+def test_resume_after_steps_that_rewrite_their_inputs(
+    cfg: Config, db: Database, source: SourceDoc, script: Script
+) -> None:
+    """Verification rewrites script.json (here: a targeted rewrite of s1); resuming later
+    must not treat it as stale and redo it."""
+    cfg.render.width, cfg.render.height = 270, 480
+    bad = script.model_copy(deep=True)
+    bad.scenes[0].narration = "Its summit rises 7,777 meters above sea level."
+    bad.scenes[0].claims[0].text = bad.scenes[0].narration
+    llm = FakeLLM(
+        {
+            "ArticleGuess": [ArticleGuess(article_title=source.title, search_query=source.title)],
+            "LLMScript": [script_to_llm(bad)],
+            "LLMSegment": [script_to_llm(script).scenes[0]],
+        }
+    )
+    pipeline = Pipeline(cfg, db, Services(llm=llm, wiki=FakeWiki(source), synth_factory=FakeSynth))
+    job_id = pipeline.create_job(Idea(text="How high is Mount Testa?", length=30))
+    assert pipeline.run(job_id) is not None
+    (pipeline.workdir(job_id).root / "render" / "render.json").unlink()
+    log: list[tuple[str, str]] = []
+    pipeline.run(job_id, progress=lambda s, m: log.append((s, m)))
+    assert {s for s, m in log if m == "started"} == {"render", "export"}

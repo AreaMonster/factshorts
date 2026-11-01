@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from pydantic import BaseModel, Field
+from rapidfuzz import fuzz
 
 from factshorts.config import ScriptConfig, TTSConfig
 from factshorts.core.llm import LLM
@@ -83,6 +85,20 @@ USER_PROMPT = """IDEA: {idea}
 SOURCE ({title}, Wikipedia):
 {source}"""
 
+REWRITE_PROMPT = """Segment {seg_id} of the script failed fact-checking:
+- {problems}
+
+Rewrite only segment {seg_id} so that every sentence is fully supported by SOURCE (same rules:
+quotes copied exactly, every number and name inside its quote, metric units, nothing beyond
+what the quote says). Keep the same topic if SOURCE supports it; otherwise use a different fact
+from SOURCE that the script does not use yet. {role}Return only the rewritten segment."""
+
+ROLE_HINTS = {
+    "hook": "This is the hook: one punchy sentence that does not misrepresent facts. ",
+    "outro": "This is the outro: one short closing line without facts (empty source_quotes). ",
+    "scene": "Write 1-2 sentences. ",
+}
+
 TOPUP_PROMPT = """The script is too short: {words} words, but it needs about {budget}.
 Write {count} MORE scenes (same JSON fields and rules) with NEW facts from SOURCE that the \
 script does not use yet. Do not repeat any fact. Return only the new scenes.{avoid}"""
@@ -124,18 +140,29 @@ def format_source(source: SourceDoc, max_words: int) -> str:
     return "\n".join(lines).strip()
 
 
+def _is_tag_on(sentence: str) -> bool:
+    """Short connective like "Here's why." that carries no fact of its own."""
+    return len(sentence.split()) <= 4 and not re.search(r"\d|[A-Z][a-z]+.*[A-Z]", sentence)
+
+
 def to_segment(s: LLMSegment, visual: SceneType | None = None) -> Segment:
-    sentences = [x for x in s.sentences if x.text.strip()]
+    """Build a Segment. If the LLM packed several sentences into one entry, its quotes go to
+    the factual sentences only; short tag-ons ("Here's why.") are left as claim-free filler."""
+    narration: list[str] = []
+    claims: list[ClaimModel] = []
+    for x in s.sentences:
+        parts = [_end_sentence(t) for t in split_sentences(x.text)] if x.text.strip() else []
+        narration += parts
+        quotes = [q.strip() for q in x.source_quotes if q.strip()]
+        factual = [t for t in parts if not (len(parts) > 1 and _is_tag_on(t))] or parts
+        claims += [
+            ClaimModel(text=t, source_quote=q, type=x.claim_type) for t in factual for q in quotes
+        ]
     return Segment(
-        narration=" ".join(_end_sentence(x.text) for x in sentences),
+        narration=" ".join(narration),
         on_screen_text=s.on_screen_text.strip(),
         visual=visual or s.visual,
-        claims=[
-            ClaimModel(text=_end_sentence(x.text), source_quote=q.strip(), type=x.claim_type)
-            for x in sentences
-            for q in x.source_quotes
-            if q.strip()
-        ],
+        claims=claims,
     )
 
 
@@ -221,6 +248,28 @@ class ScriptWriter:
         script = fit_budget(best, self.budget, self.cfg)
         return self.top_up(script)
 
+    def rewrite_segment(self, script: Script, seg_id: str, problems: list[str]) -> Script:
+        """Targeted rewrite of one failing segment; the rest of the script stays as it is."""
+        role = "hook" if seg_id == "hook" else "outro" if seg_id == "outro" else "scene"
+        messages = [
+            *self.base,
+            {"role": "assistant", "content": script_to_json(script)},
+            {
+                "role": "user",
+                "content": REWRITE_PROMPT.format(
+                    seg_id=seg_id,
+                    problems="\n- ".join(problems[:8]) or "unsupported",
+                    role=ROLE_HINTS[role],
+                ),
+            },
+        ]
+        raw = self.llm.structured(
+            messages, LLMSegment, model=self.model, retries=self.cfg.max_json_retries
+        )
+        new = to_segment(raw, "title" if role != "scene" else None)
+        log.info("rewrote %s: %s", seg_id, new.narration)
+        return replace_segment(script, seg_id, new)
+
     def top_up(
         self, script: Script, avoid: list[str] | None = None, target_words: int | None = None
     ) -> Script:
@@ -253,7 +302,9 @@ class ScriptWriter:
             more = self.llm.structured(
                 messages, LLMMoreScenes, model=self.model, retries=self.cfg.max_json_retries
             )
-            new = [to_segment(s) for s in more.scenes][:room]
+            new = [s for s in (to_segment(x) for x in more.scenes) if not _repeats(s, script)][
+                :room
+            ]
             script.scenes.extend(new)
             script.assign_ids()
             log.info(
@@ -269,6 +320,23 @@ class ScriptWriter:
                 self.budget,
             )
         return script
+
+
+def replace_segment(script: Script, seg_id: str, new: Segment) -> Script:
+    if seg_id == "hook":
+        script.hook = new
+    elif seg_id == "outro":
+        script.outro = new
+    else:
+        script.scenes = [new if s.id == seg_id else s for s in script.scenes]
+    return script.assign_ids()
+
+
+def _repeats(seg: Segment, script: Script) -> bool:
+    """A new scene that only restates sentences already in the script adds nothing."""
+    existing = [t.casefold() for s in script.segments for t in split_sentences(s.narration)]
+    new = [t.casefold() for t in split_sentences(seg.narration)]
+    return bool(new) and all(any(fuzz.ratio(n, e) >= 85 for e in existing) for n in new)
 
 
 def script_to_json(script: Script) -> str:

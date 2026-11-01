@@ -13,7 +13,8 @@ url = "http://127.0.0.1:11434"
 # Use the largest model that fits your VRAM/RAM (see README). The judge should be a
 # different model family than the writer so it doesn't share its blind spots.
 writer_model = "qwen3:14b"
-judge_model = "llama3.1:8b"
+# gemma4:26b judged 10/10 on a labeled Everest test set; llama3.1:8b passed a wrong number.
+judge_model = "gemma4:26b"
 temperature = 0.4
 num_ctx = 12288
 timeout_s = 600
@@ -63,9 +64,67 @@ llm_judge = true
 max_rounding_error = 0.05
 # Extra relative tolerance after unit conversion (e.g. ft -> m).
 conversion_tolerance = 0.005
-# Whole-script regeneration attempts when checks fail (targeted scene rewrites come in phase 2).
+# Rounds of targeted scene rewrites before a failing scene is dropped (or the idea rejected).
+max_rewrite_rounds = 3
 max_script_attempts = 3
 require_review = true
+# Local entailment model (CPU). The claim must be entailed by its quote/paragraph with at
+# least this probability.
+nli_model = "MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli"
+nli_device = "cpu"
+nli_threshold = 0.5
+# The LLM judge uses [ollama].judge_model (a different model family than the writer).
+
+# Wikidata cross-check: a numeric/date claim about the article's subject that mentions one of
+# these keywords must agree with the property's value(s). Add more as needed.
+[verification.wikidata_properties.P2044]
+label = "elevation above sea level"
+keywords = ["tall", "high", "height", "elevation", "altitude", "above sea level", "summit"]
+[verification.wikidata_properties.P2048]
+label = "height"
+keywords = ["tall", "high", "height"]
+[verification.wikidata_properties.P2043]
+label = "length"
+keywords = ["long", "length"]
+[verification.wikidata_properties.P2049]
+label = "width"
+keywords = ["wide", "width"]
+[verification.wikidata_properties.P2386]
+label = "diameter"
+keywords = ["diameter", "across"]
+[verification.wikidata_properties.P2120]
+label = "radius"
+keywords = ["radius"]
+[verification.wikidata_properties.P4511]
+label = "vertical depth"
+keywords = ["deep", "depth"]
+[verification.wikidata_properties.P2046]
+label = "area"
+keywords = ["area", "covers", "square"]
+[verification.wikidata_properties.P1082]
+label = "population"
+keywords = ["population", "inhabitants", "residents", "people live"]
+[verification.wikidata_properties.P2067]
+label = "mass"
+keywords = ["weigh", "weight", "mass", "heavy"]
+[verification.wikidata_properties.P2583]
+label = "distance from Earth"
+keywords = ["from earth", "away from earth", "away from us"]
+[verification.wikidata_properties.P571]
+label = "inception"
+keywords = ["founded", "built", "established", "created", "formed", "constructed", "completed"]
+[verification.wikidata_properties.P569]
+label = "date of birth"
+keywords = ["born", "birth"]
+[verification.wikidata_properties.P570]
+label = "date of death"
+keywords = ["died", "death"]
+[verification.wikidata_properties.P575]
+label = "time of discovery"
+keywords = ["discovered", "discovery"]
+[verification.wikidata_properties.P1619]
+label = "date of official opening"
+keywords = ["opened"]
 
 [tts]
 # kokoro (default, natural, Apache 2.0) or piper (fast fallback, more robotic)

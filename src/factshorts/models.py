@@ -13,7 +13,7 @@ SceneType = Literal[
     "big_number", "comparison", "timeline", "map_pin", "icon_list", "image", "quote", "title"
 ]
 ClaimType = Literal["number", "date", "name", "general"]
-CheckStatus = Literal["pass", "fail", "skipped"]
+CheckStatus = Literal["pass", "fail", "skipped", "na"]  # na = check does not apply
 SegmentRole = Literal["hook", "scene", "outro"]
 
 
@@ -156,11 +156,13 @@ class Verification(BaseModel):
 
     @property
     def skipped_checks(self) -> list[str]:
-        """Enabled checks that did not actually run on some claim."""
-        return sorted(
-            {c.check for v in self.claims for c in v.checks if c.status == "skipped"}
-            & set(self.enabled_checks)
-        )
+        """Enabled checks that did not actually run where they should have."""
+        skipped = {c.check for v in self.claims for c in v.checks if c.status == "skipped"}
+        if any(
+            c.check == "filler" and c.status == "skipped" for s in self.sentences for c in s.checks
+        ):
+            skipped.add("llm_judge")  # the judge could not classify a claim-less sentence
+        return sorted(skipped & set(self.enabled_checks))
 
     @property
     def label(self) -> Literal["VERIFIED", "PARTIALLY_VERIFIED", "UNVERIFIED"]:
