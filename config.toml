@@ -103,13 +103,13 @@ audio_bitrate = "192k"
 lufs_target = -14.0
 
 [visuals]
-# hybrid   = AI illustration per scene; real AI motion (Wan 2.2) on the best scenes, 3D depth
-#            parallax on the rest (~25 min per 75 s video on a 16 GB GPU)
-# parallax = illustration + depth parallax everywhere (~12 min)
+# parallax = AI illustration per scene + 3D depth camera move (default, ~10 min per video)
+# hybrid   = like parallax, plus real AI motion (Wan 2.2) on a few scenes (~25 min;
+#            judged not good enough in the Phase 1.5 review, kept as an option)
 # wan      = AI motion on every scene (slow: ~50+ min)
 # kenburns = illustration + simple pan/zoom (no depth model)
 # off      = animated gradient background only (fast, no GPU needed)
-mode = "hybrid"
+mode = "parallax"
 image_model = "Tongyi-MAI/Z-Image-Turbo"     # Apache 2.0
 image_steps = 9
 image_width = 768

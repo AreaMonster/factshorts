@@ -115,8 +115,8 @@ class RenderConfig(_Section):
 
 
 class VisualsConfig(_Section):
-    # hybrid: AI motion on the best scenes, depth parallax elsewhere.
-    mode: Literal["hybrid", "parallax", "wan", "kenburns", "off"] = "hybrid"
+    # parallax: AI illustration + 3D depth camera move on every scene (default).
+    mode: Literal["hybrid", "parallax", "wan", "kenburns", "off"] = "parallax"
     image_model: str = "Tongyi-MAI/Z-Image-Turbo"
     image_steps: int = 9
     image_width: int = 768

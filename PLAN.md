@@ -240,7 +240,11 @@ videos too short to monetize. Decisions:
    Lesson from the prototype: Wan at 704x1280 overflows 16 GB VRAM into shared memory and
    becomes ~20x slower; stay at 480x832.
 
-### Phase 1.5 (next): apply the review feedback
+7. **Revised after the Phase 1.5 sample:** the Wan motion clips did not look good enough, so
+   the default is now `parallax` (illustration + depth camera move on every scene, ~10 min per
+   video). Wan stays available as `mode = "hybrid"` / `"wan"` but is off by default.
+
+### Phase 1.5: apply the review feedback (done)
 1. Kokoro TTS engine (default `am_michael`), Piper kept as fallback; use Kokoro's word
    timestamps for exact caption sync.
 2. Longer videos: lengths 30/45/60/75/90 s, default 70 s; script generation tops up scenes when
