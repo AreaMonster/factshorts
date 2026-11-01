@@ -47,6 +47,7 @@ from factshorts.sources.wikipedia import Wikipedia
 from factshorts.verify.aggregate import Verifier
 from factshorts.verify.llm_judge import Judge
 from factshorts.verify.nli import NLIModel, TransformersNLI
+from factshorts.verify.normalize import normalize_chars
 
 log = logging.getLogger(__name__)
 
@@ -461,7 +462,9 @@ class Pipeline:
         merged = script.model_copy(deep=True)
         kept = 0
         for old_seg, new_seg in zip(script.segments, polished.segments, strict=True):
-            if new_seg.id not in bad:
+            # Polishing may change wording, not move facts: the segment must cite exactly the
+            # same source sentences as before, or content would get duplicated or lost.
+            if new_seg.id not in bad and _quotes(new_seg) == _quotes(old_seg):
                 merged = replace_segment(merged, old_seg.id, new_seg)
                 kept += 1
         if "title" not in bad:
@@ -686,6 +689,10 @@ class Pipeline:
         )
         notify("export", f"{verification.label}: {result.folder}")
         wd.write_model("export.json", result)
+
+
+def _quotes(seg: Segment) -> set[str]:
+    return {normalize_chars(c.source_quote).casefold() for c in seg.claims}
 
 
 def failed_segments(result: Verification) -> set[str]:

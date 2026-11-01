@@ -329,3 +329,29 @@ def test_fallback_pictures_differ(cfg: Config, script: Script, tmp_path) -> None
     prompts = [s.prompt for s in plan.scenes]
     assert all(s.review.startswith("fallback") for s in plan.scenes)
     assert len(set(prompts[:4])) == 4  # four different framings before they repeat
+
+
+def test_editing_pass_cannot_move_facts_between_segments(
+    cfg: Config, db: Database, source: SourceDoc, script: Script
+) -> None:
+    cfg.script.polish = True
+    polished = script.model_copy(deep=True)
+    # The "polish" swaps the facts of s1 and s2 (each still checks out on its own).
+    polished.scenes[0], polished.scenes[1] = (
+        script.scenes[1].model_copy(deep=True),
+        script.scenes[0].model_copy(deep=True),
+    )
+    polished.assign_ids()
+    llm = FakeLLM(
+        {
+            "ArticleGuess": [ArticleGuess(article_title=source.title, search_query=source.title)],
+            "LLMScript": [script_to_llm(script), script_to_llm(polished)],
+        }
+    )
+    pipeline = Pipeline(cfg, db, Services(llm=llm, wiki=FakeWiki(source), synth_factory=FakeSynth))
+    job_id = pipeline.create_job(Idea(text="How high is Mount Testa?", length=30))
+    assert pipeline.run(job_id) is not None
+    final = Script.model_validate_json(
+        (pipeline.workdir(job_id).root / "script.json").read_text("utf-8")
+    )
+    assert [s.narration for s in final.scenes] == [s.narration for s in script.scenes]
