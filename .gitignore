@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Runtime data (normally in data_dir outside the repo, ignored here just in case)
+work/
+output/
+cache/
+logs/
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Local config overrides / secrets
+config.local.toml
+.env
+
+# OS / editors
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
