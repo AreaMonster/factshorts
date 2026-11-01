@@ -40,7 +40,9 @@ ConfigOpt = Annotated[Path | None, typer.Option("--config", help="Path to config
 @app.command()
 def make(
     idea: Annotated[str, typer.Option("--idea", help="The video idea, e.g. a question")],
-    length: Annotated[int | None, typer.Option(help="Target length: 30, 45 or 60 s")] = None,
+    length: Annotated[
+        int | None, typer.Option(help="Target length in seconds (20-180, default 75)")
+    ] = None,
     tone: Annotated[str | None, typer.Option(help="neutral, funny, dramatic, kid-friendly")] = None,
     config: ConfigOpt = None,
 ) -> None:
@@ -50,7 +52,7 @@ def make(
     cfg, db = _bootstrap(config)
     idea_model = Idea(
         text=idea.strip(),
-        length=length or cfg.script.default_length,  # type: ignore[arg-type]
+        length=length or cfg.script.default_length,
         tone=tone or cfg.script.default_tone,  # type: ignore[arg-type]
     )
     pipeline = Pipeline(cfg, db)

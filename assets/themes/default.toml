@@ -22,3 +22,8 @@ small_weight = 600
 [animation]
 speed = 1.0                      # >1 = snappier text animations
 particles = 36
+
+[art]
+# Appended to every AI illustration prompt.
+style_name = "a flat 2D vector illustration"
+style = "flat 2D vector illustration, bold clean shapes, soft gradients, vibrant colors, educational animation style, cel shaded, no text, no letters, no watermark"

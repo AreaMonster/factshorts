@@ -26,7 +26,7 @@ def utcnow() -> datetime:
 
 class Idea(BaseModel):
     text: str
-    length: Literal[30, 45, 60] = 45
+    length: int = Field(default=75, ge=20, le=180)  # target seconds
     tone: Tone = "neutral"
     factcheck: bool = True
     force: bool = False
@@ -88,6 +88,9 @@ class Segment(BaseModel):
     on_screen_text: str
     visual: SceneType = "title"
     claims: list[Claim] = Field(default_factory=list)
+    image_prompt: str = ""  # what the AI illustration shows (generic, no real people)
+    motion: str = ""  # what moves when the scene is animated
+    visual_interest: int = 3  # 1-5: how much the scene gains from real AI motion
 
 
 class Script(BaseModel):
@@ -197,6 +200,30 @@ class AudioPlan(BaseModel):
     wav: str
     duration: float
     segments: list[SegmentAudio]
+
+
+# --- Visuals ---------------------------------------------------------------
+
+
+class SceneVisual(BaseModel):
+    segment_id: str
+    kind: Literal["wan", "parallax", "kenburns", "none"]
+    frames: int
+    prompt: str = ""
+    motion: str = ""
+    seed: int = 0
+    image: str | None = None  # file name in work/<job>/visuals
+    clip: str | None = None  # background clip with exactly `frames` frames
+
+
+class VisualsPlan(BaseModel):
+    mode: str
+    style: str = ""
+    models: dict[str, str] = Field(default_factory=dict)
+    scenes: list[SceneVisual] = Field(default_factory=list)
+
+    def clip_for(self, segment_id: str) -> str | None:
+        return next((s.clip for s in self.scenes if s.segment_id == segment_id), None)
 
 
 # --- Output ----------------------------------------------------------------

@@ -44,6 +44,15 @@ class OllamaLLM:
         resp.raise_for_status()
         return sorted(m["name"] for m in resp.json().get("models", []))
 
+    def unload_all(self) -> None:
+        """Free the GPU: ask Ollama to unload every loaded model (keep_alive=0)."""
+        try:
+            loaded = self.client.get("/api/ps").json().get("models", [])
+            for m in loaded:
+                self.client.post("/api/generate", json={"model": m["name"], "keep_alive": 0})
+        except httpx.HTTPError as exc:
+            log.warning("could not unload Ollama models: %s", exc)
+
     def chat(
         self,
         messages: list[dict[str, str]],

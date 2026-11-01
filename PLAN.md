@@ -211,3 +211,42 @@ proportional captions, progress bar) → `final.mp4` + `sources.json` →
 one real sample video, with an ffprobe check that audio and video durations match
 within 100 ms. Tests for normalization, quote matching, entity check and TTS text
 normalization run offline with ruff clean.
+
+## 9. Changes after Phase 1 review (2026-11-01)
+
+Feedback on the first sample: voice too monotone, visuals too plain ("blue screen with text"),
+videos too short to monetize. Decisions:
+
+1. **Length:** default target ~65–75 s (TikTok Creator Rewards only pays for videos longer
+   than 1 minute). Per-video options become 30/45/60/75/90 s. The script step must reliably
+   reach the word budget (add scenes in a follow-up call when the first draft is short), and the
+   final narration must be > 61 s for the default.
+2. **Visuals:** AI-generated, *stylized* animation per scene (illustration style, not
+   photorealistic footage), showing what the narration says. Candidate stack, all local and
+   commercially usable: Z-Image-Turbo (Apache 2.0) for scene illustrations, 2.5D depth parallax
+   (Depth-Anything-V2-Small, Apache 2.0) and/or Wan 2.2 TI2V-5B (Apache 2.0) for motion.
+   Text, captions, numbers and infographics stay as overlays drawn by our renderer.
+   AI scenes never depict real, identifiable people. Videos get an "AI illustrations" note.
+3. **Voice:** replace or supplement Piper with a more natural engine. Candidates: Kokoro-82M
+   (Apache 2.0) and Chatterbox (MIT, more expressive, needs GPU). Chosen by listening test.
+4. These deviate from the spec (Piper-only, self-drawn graphics); approved by the user.
+   The spec's verification work (Phase 2) still comes before anything is published.
+5. **Voice chosen (listening test):** Kokoro-82M, voice `am_michael` (American male), replacing
+   Piper as the default engine. Piper stays available as a fallback engine.
+6. **Visuals chosen:** hybrid. Every scene gets a stylized Z-Image-Turbo illustration; ~4 key
+   scenes (hook + the most visual moments, configurable) get real Wan 2.2 TI2V-5B motion at
+   480x832 (upscaled), the rest get depth parallax. Prototype timings on the RTX 5070 Ti:
+   illustration ~55 s, parallax ~10 s/clip, Wan ~195 s per 3.4 s clip -> ~25 min per 70 s video.
+   Lesson from the prototype: Wan at 704x1280 overflows 16 GB VRAM into shared memory and
+   becomes ~20x slower; stay at 480x832.
+
+### Phase 1.5 (next): apply the review feedback
+1. Kokoro TTS engine (default `am_michael`), Piper kept as fallback; use Kokoro's word
+   timestamps for exact caption sync.
+2. Longer videos: lengths 30/45/60/75/90 s, default 70 s; script generation tops up scenes when
+   short; final narration must exceed 61 s for the default.
+3. Visual pipeline: LLM writes a generic, people-free `image_prompt` per scene from the verified
+   narration; illustration -> parallax or Wan -> upscale -> our text/captions/numbers on top.
+   GPU models run one at a time (unload Ollama's model before image/video generation).
+4. Export: "AI illustrations" note in description; models and prompts recorded in sources.json.
+Then Phase 2 (full verification) as planned.

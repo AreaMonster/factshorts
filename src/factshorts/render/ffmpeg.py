@@ -185,6 +185,47 @@ class FrameWriter:
         return f"ffmpeg encode of {self.out.name} failed: {err[-600:]}"
 
 
+class FrameReader:
+    """Decode a video to raw RGB frames, one at a time (repeats the last frame at the end)."""
+
+    def __init__(self, path: Path, width: int, height: int) -> None:
+        self.size = width * height * 3
+        self.proc = subprocess.Popen(
+            [
+                ffmpeg_bin(),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(path),
+                "-vf",
+                f"scale={width}:{height}:in_color_matrix=bt709:in_range=tv",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ],
+            stdout=subprocess.PIPE,
+        )
+        self.last: bytes | None = None
+
+    def read(self) -> bytes:
+        assert self.proc.stdout is not None
+        data = self.proc.stdout.read(self.size)
+        if len(data) == self.size:
+            self.last = data
+        if self.last is None:
+            raise FFmpegError("background clip has no frames")
+        return self.last
+
+    def close(self) -> None:
+        if self.proc.stdout:
+            self.proc.stdout.close()
+        self.proc.kill()
+        self.proc.wait()
+
+
 def concat(segments: list[Path], out: Path) -> None:
     listing = out.with_suffix(".txt")
     listing.write_text(

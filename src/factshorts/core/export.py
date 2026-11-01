@@ -18,6 +18,7 @@ from factshorts.models import (
     Script,
     SourceDoc,
     Verification,
+    VisualsPlan,
     utcnow,
 )
 
@@ -98,8 +99,22 @@ def build_sources_json(
     }
 
 
+def ai_visuals_note(visuals: VisualsPlan | None) -> str | None:
+    if visuals is None or visuals.mode == "off" or not visuals.scenes:
+        return None
+    return (
+        "Illustrations and animation are AI-generated (stylized, not real footage); "
+        "the narration is checked against the sources below."
+    )
+
+
 def build_description(
-    script: Script, source: SourceDoc, tags: list[str], label: str, not_run: list[str]
+    script: Script,
+    source: SourceDoc,
+    tags: list[str],
+    label: str,
+    not_run: list[str],
+    visuals: VisualsPlan | None = None,
 ) -> str:
     lines = [script.title, "", script.hook.narration]
     if label == "UNVERIFIED":
@@ -114,6 +129,9 @@ def build_description(
         lines.append(f"  Text license: {WIKIPEDIA_LICENSE}")
     else:
         lines.append(f"- {source.title}" + (f": {source.url}" if source.url else ""))
+    note = ai_visuals_note(visuals)
+    if note:
+        lines += ["", note]
     if label != "UNVERIFIED":
         lines += ["", DISCLAIMER]
     lines += ["", " ".join(tags)]
@@ -153,6 +171,7 @@ def export(
     output_dir: Path,
     verified: bool,
     sync: dict[str, float] | None = None,
+    visuals: VisualsPlan | None = None,
 ) -> ExportResult:
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     full_label = verification.label if verification and verified else "UNVERIFIED"
@@ -173,10 +192,29 @@ def export(
         "encoder": render.encoder,
         "sync": sync,
     }
+    if visuals is not None and visuals.mode != "off":
+        sources["visuals"] = {
+            "ai_generated": True,
+            "mode": visuals.mode,
+            "models": visuals.models,
+            "style": visuals.style,
+            "scenes": [
+                {
+                    "segment": sc.segment_id,
+                    "kind": sc.kind,
+                    "prompt": sc.prompt,
+                    "motion": sc.motion if sc.kind == "wan" else None,
+                    "seed": sc.seed,
+                }
+                for sc in visuals.scenes
+            ],
+        }
     sources_path = folder / "sources.json"
     sources_path.write_text(json.dumps(sources, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    description = build_description(script, source, tags, full_label, sources["checks_not_run"])
+    description = build_description(
+        script, source, tags, full_label, sources["checks_not_run"], visuals
+    )
     desc_path = folder / "description.txt"
     desc_path.write_text(description, encoding="utf-8")
 
@@ -194,6 +232,7 @@ def export(
         "voice": audio.voice,
         "source_links": [source.revision_url] if source.revision_url else [],
         "image_credits": [],
+        "ai_generated_visuals": bool(visuals and visuals.mode != "off" and visuals.scenes),
         "status": "pending",
     }
     meta_path = folder / "metadata.json"

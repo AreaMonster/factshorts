@@ -48,11 +48,20 @@ class ThemeAnimation(BaseModel):
     particles: int = 36
 
 
+class ThemeArt(BaseModel):
+    style_name: str = "a flat 2D vector illustration"
+    style: str = (
+        "flat 2D vector illustration, bold clean shapes, soft gradients, vibrant colors, "
+        "educational animation style, cel shaded, no text, no letters, no watermark"
+    )
+
+
 class Theme(BaseModel):
     name: str = "default"
     colors: ThemeColors = Field(default_factory=ThemeColors)
     fonts: ThemeFonts = Field(default_factory=ThemeFonts)
     animation: ThemeAnimation = Field(default_factory=ThemeAnimation)
+    art: ThemeArt = Field(default_factory=ThemeArt)
 
     def display_font(self, size: int) -> ImageFont.FreeTypeFont:
         return load_font(self.fonts.display, size, self.fonts.display_weight)

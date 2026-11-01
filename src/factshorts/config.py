@@ -61,11 +61,15 @@ class CacheConfig(_Section):
 
 
 class ScriptConfig(_Section):
-    default_length: Literal[30, 45, 60] = 45
+    default_length: int = Field(default=75, ge=20, le=180)
     default_tone: Tone = "neutral"
-    words_per_minute: int = 150
+    words_per_minute: int = 160
+    seconds_per_scene: float = 6.5
     min_scenes: int = 4
-    max_scenes: int = 7
+    max_scenes: int = 16
+    max_topups: int = 2
+    # Videos targeting >= 60 s must end up at least this long (TikTok pays for > 1 minute).
+    min_duration_s: float = 62.0
     max_json_retries: int = 3
     budget_tolerance: float = 0.10
     max_source_words: int = 4000
@@ -84,7 +88,10 @@ class VerificationConfig(_Section):
 
 
 class TTSConfig(_Section):
-    voice: str = "en_US-ryan-high"
+    engine: Literal["kokoro", "piper"] = "kokoro"
+    voice: str = "am_michael"
+    speed: float = 1.0
+    piper_voice: str = "en_US-ryan-high"
     length_scale: float = 1.0
     sentence_pause_ms: int = 250
     scene_pause_ms: int = 450
@@ -105,6 +112,27 @@ class RenderConfig(_Section):
     video_quality: int = 20
     audio_bitrate: str = "192k"
     lufs_target: float = -14.0
+
+
+class VisualsConfig(_Section):
+    # hybrid: AI motion on the best scenes, depth parallax elsewhere.
+    mode: Literal["hybrid", "parallax", "wan", "kenburns", "off"] = "hybrid"
+    image_model: str = "Tongyi-MAI/Z-Image-Turbo"
+    image_steps: int = 9
+    image_width: int = 768
+    image_height: int = 1344
+    depth_model: str = "depth-anything/Depth-Anything-V2-Small-hf"
+    video_model: str = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+    wan_scenes: int = 4
+    wan_include_hook: bool = True
+    wan_steps: int = 30
+    wan_width: int = 480
+    wan_height: int = 832
+    wan_frames: int = 81
+    wan_fps: int = 24
+    min_playback_speed: float = 0.55
+    crossfade_frames: int = 8
+    device: str = "cuda"
 
 
 class OutputConfig(_Section):
@@ -128,6 +156,7 @@ class Config(BaseModel):
     verification: VerificationConfig = Field(default_factory=VerificationConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
+    visuals: VisualsConfig = Field(default_factory=VisualsConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     web: WebConfig = Field(default_factory=WebConfig)
 
@@ -167,6 +196,10 @@ class Config(BaseModel):
         return self.data_dir / "factshorts.db"
 
     def ensure_dirs(self) -> None:
+        # Hugging Face downloads (voices, image/video models) go to the data folder too.
+        os.environ.setdefault("HF_HOME", str(self.models_dir / "hf"))
+        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+        os.environ.setdefault("HF_HUB_VERBOSITY", "error")
         for d in (self.work_dir, self.output_dir, self.cache_dir, self.models_dir, self.logs_dir):
             d.mkdir(parents=True, exist_ok=True)
         for sub in ("pending", "approved", "rejected"):

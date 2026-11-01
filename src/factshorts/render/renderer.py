@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-import math
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 from factshorts.config import RenderConfig
@@ -20,6 +20,7 @@ from factshorts.render.background import Background
 from factshorts.render.easing import ease_out_back, ease_out_cubic, progress
 from factshorts.render.layout import SafeZone, fit_text
 from factshorts.render.themes import Theme, load_theme
+from factshorts.render.timeline import segment_frame_ranges, total_frames
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class SegmentSpec:
     start_frame: int
     end_frame: int
     words: list[dict[str, float | str]] = field(default_factory=list)
+    background: str | None = None  # AI background clip with exactly this segment's frames
 
 
 @dataclass
@@ -111,15 +113,31 @@ def _paste(
     frame.paste(layer, (int(cx - layer.width / 2), int(cy - layer.height / 2)), layer)
 
 
+def _scrim(width: int, height: int, s: float) -> np.ndarray:
+    """Darkening mask so white text stays readable on bright illustrations:
+    a fade at the top (title text) and a soft band behind the captions."""
+    y = np.arange(height, dtype=np.float32)
+    top = 0.50 * np.clip(1 - y / (760 * s), 0, 1) ** 1.4
+    cap_center = height * 0.8 - 250 * s
+    band = 0.38 * np.exp(-(((y - cap_center) / (210 * s)) ** 2))
+    dark = np.clip(top + band, 0, 0.6)
+    return (1 - dark)[:, None, None]
+
+
 class SegmentPainter:
     def __init__(self, spec: RenderSpec) -> None:
         self.spec = spec
         self.seg = spec.segment
         self.theme: Theme = load_theme(spec.theme)
         self.zone = SafeZone.for_size(spec.width, spec.height)
-        self.bg = Background(self.theme, spec.width, spec.height)
-        self.speed = self.theme.animation.speed
         self.s = spec.width / 1080
+        self.clip: ffmpeg.FrameReader | None = None
+        if self.seg.background:
+            self.clip = ffmpeg.FrameReader(Path(self.seg.background), spec.width, spec.height)
+            self.scrim = _scrim(spec.width, spec.height, self.s)
+        else:
+            self.bg = Background(self.theme, spec.width, spec.height)
+        self.speed = self.theme.animation.speed
         self.words = [WordTiming(**w) for w in self.seg.words]  # type: ignore[arg-type]
         self.chunks = caption_chunks(self.words)
         self._caption_cache: dict[tuple[int, int], Image.Image] = {}
@@ -137,12 +155,15 @@ class SegmentPainter:
         if not text:
             return None
         big = self.seg.role in ("hook", "outro") or self.seg.visual == "big_number"
+        # Over illustrations the text sits higher and smaller so the picture stays visible.
+        on_image = self.clip is not None
+        size = (150 if big else 120) if on_image else (190 if big else 150)
         font, lines, line_h = fit_text(
             text.upper(),
             self.theme.display_font,
             max_width=self.zone.inner_width,
-            max_height=int(560 * self.s),
-            max_size=int((190 if big else 150) * self.s),
+            max_height=int((400 if on_image else 560) * self.s),
+            max_size=int(size * self.s),
             min_size=int(60 * self.s),
             max_lines=4,
             line_spacing=0.95,
@@ -201,7 +222,12 @@ class SegmentPainter:
         t = frame_index / spec.fps
         local = (frame_index - seg.start_frame) / spec.fps
         seg_len = (seg.end_frame - seg.start_frame) / spec.fps
-        frame = Image.fromarray(self.bg.frame(t), "RGB")
+        if self.clip is not None:
+            raw = np.frombuffer(self.clip.read(), dtype=np.uint8)
+            raw = raw.reshape(spec.height, spec.width, 3)
+            frame = Image.fromarray((raw * self.scrim).astype(np.uint8), "RGB")
+        else:
+            frame = Image.fromarray(self.bg.frame(t), "RGB")
         draw = ImageDraw.Draw(frame)
 
         # progress bar
@@ -223,7 +249,8 @@ class SegmentPainter:
         if seg.visual == "big_number" and self.number_match and local < 0.9:
             layer = self._count_up_layer(progress(local, 0.0, 0.9))
         if layer is not None:
-            cy = self.zone.top + int(560 * self.s) - (1 - p_in) * 70 * self.s
+            base_y = 330 if self.clip is not None else 560
+            cy = self.zone.top + int(base_y * self.s) - (1 - p_in) * 70 * self.s
             scale = 0.9 + 0.1 * ease_out_back(progress(local, 0.0, intro))
             _paste(frame, layer, self.zone.center_x, cy, alpha=min(p_in, p_out), scale=scale)
         if self.extra is not None:
@@ -278,6 +305,8 @@ def render_segment(spec_dict: dict) -> str:
             writer.write(painter.paint(i))
     finally:
         writer.close()
+        if painter.clip is not None:
+            painter.clip.close()
     return spec.out
 
 
@@ -292,14 +321,15 @@ def build_specs(
     out_dir: Path,
     source_label: str,
     theme: str | None = None,
+    backgrounds: dict[str, str] | None = None,
 ) -> list[RenderSpec]:
-    total_frames = math.ceil(audio.duration * cfg.fps)
+    total = total_frames(audio, cfg.fps)
+    ranges = segment_frame_ranges(audio, cfg.fps)
     by_id = {s.id: s for s in script.segments}
     specs: list[RenderSpec] = []
     for i, sa in enumerate(audio.segments):
         seg = by_id[sa.segment_id]
-        start = round(sa.start * cfg.fps)
-        end = total_frames if i == len(audio.segments) - 1 else round(sa.end * cfg.fps)
+        start, end = ranges[sa.segment_id]
         words = [w.model_dump() for s in sa.sentences for w in s.words]
         specs.append(
             RenderSpec(
@@ -309,7 +339,7 @@ def build_specs(
                 theme=theme or cfg.theme,
                 codec=codec,
                 quality=cfg.video_quality,
-                total_frames=total_frames,
+                total_frames=total,
                 title=script.title,
                 source_label=source_label,
                 segment=SegmentSpec(
@@ -320,6 +350,7 @@ def build_specs(
                     start_frame=start,
                     end_frame=end,
                     words=words,
+                    background=(backgrounds or {}).get(seg.id),
                 ),
                 out=str(out_dir / f"{i:02d}_{seg.id}.mp4"),
             )
@@ -342,10 +373,11 @@ def render_video(
     cfg: RenderConfig,
     source_label: str,
     theme: str | None = None,
+    backgrounds: dict[str, str] | None = None,
 ) -> RenderResult:
     render_dir.mkdir(parents=True, exist_ok=True)
     codec = ffmpeg.pick_encoder(cfg.encoder)
-    specs = build_specs(script, audio, cfg, codec, render_dir, source_label, theme)
+    specs = build_specs(script, audio, cfg, codec, render_dir, source_label, theme, backgrounds)
     workers = worker_count(cfg, codec, len(specs))
     log.info(
         "rendering %d segments, %d frames, encoder %s, %d workers",

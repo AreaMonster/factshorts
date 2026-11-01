@@ -33,11 +33,20 @@ search_limit = 5
 http_ttl_hours = 168
 
 [script]
-default_length = 45          # seconds: 30, 45 or 60
+# Target seconds (20-180). TikTok Creator Rewards only pays for videos longer than 1 minute.
+default_length = 75
 default_tone = "neutral"     # neutral, funny, dramatic, kid-friendly
-words_per_minute = 150
+# Measured speaking rate of the voice (Kokoro am_michael: ~160 words per minute).
+words_per_minute = 160
+# Scene count follows the length (75 s / 6.5 ≈ 12 scenes), within these bounds.
+seconds_per_scene = 6.5
 min_scenes = 4
-max_scenes = 7
+max_scenes = 16
+# Extra LLM calls that add scenes when a draft is too short or scenes fail fact-checking.
+max_topups = 2
+# Videos targeting 60 s or more are extended with extra scenes until the narration is at
+# least this long (TikTok Creator Rewards only pays for videos longer than 1 minute).
+min_duration_s = 62.0
 max_json_retries = 3
 # Narration may use at most this fraction above the word budget before it is rejected/retried.
 budget_tolerance = 0.10
@@ -59,9 +68,15 @@ max_script_attempts = 3
 require_review = true
 
 [tts]
-# Piper voice name from https://huggingface.co/rhasspy/piper-voices
-voice = "en_US-ryan-high"
-length_scale = 1.0           # >1 slower, <1 faster
+# kokoro (default, natural, Apache 2.0) or piper (fast fallback, more robotic)
+engine = "kokoro"
+# Kokoro voices: am_michael, am_fenrir, am_puck, af_heart, bm_george, bf_emma, ...
+# (https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md)
+voice = "am_michael"
+speed = 1.0                  # Kokoro speaking speed
+# Piper voice name from https://huggingface.co/rhasspy/piper-voices (only for engine = piper)
+piper_voice = "en_US-ryan-high"
+length_scale = 1.0           # Piper: >1 slower, <1 faster
 sentence_pause_ms = 250
 scene_pause_ms = 450
 lead_in_ms = 150
@@ -86,6 +101,32 @@ max_hw_sessions = 4
 video_quality = 20           # CRF / CQ value, lower = better
 audio_bitrate = "192k"
 lufs_target = -14.0
+
+[visuals]
+# hybrid   = AI illustration per scene; real AI motion (Wan 2.2) on the best scenes, 3D depth
+#            parallax on the rest (~25 min per 75 s video on a 16 GB GPU)
+# parallax = illustration + depth parallax everywhere (~12 min)
+# wan      = AI motion on every scene (slow: ~50+ min)
+# kenburns = illustration + simple pan/zoom (no depth model)
+# off      = animated gradient background only (fast, no GPU needed)
+mode = "hybrid"
+image_model = "Tongyi-MAI/Z-Image-Turbo"     # Apache 2.0
+image_steps = 9
+image_width = 768
+image_height = 1344
+depth_model = "depth-anything/Depth-Anything-V2-Small-hf"   # Apache 2.0
+video_model = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"            # Apache 2.0
+wan_scenes = 4               # scenes that get real motion in hybrid mode
+wan_include_hook = true      # always animate the first scene
+wan_steps = 30
+# Keep 480x832 on 16 GB GPUs: larger sizes overflow VRAM and get ~20x slower.
+wan_width = 480
+wan_height = 832
+wan_frames = 81              # 4k+1 frames; 81 at 24 fps = 3.4 s of motion
+wan_fps = 24
+min_playback_speed = 0.55    # stretch short clips to fill a scene, down to this speed
+crossfade_frames = 8
+device = "cuda"
 
 [output]
 # Relative paths resolve against data_dir.

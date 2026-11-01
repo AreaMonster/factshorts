@@ -20,6 +20,15 @@ dependencies = [
     "rapidfuzz>=3.14",
     "pillow>=13.0",
     "numpy>=2.4",
+    # voice (Kokoro, Apache 2.0) and its English text frontend
+    "kokoro>=0.9.4",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    # AI visuals: Z-Image-Turbo, Depth Anything V2, Wan 2.2 (all Apache 2.0)
+    "torch>=2.11",
+    "diffusers>=0.42",
+    "transformers>=5.0",
+    "accelerate>=1.10",
+    "ftfy>=6.3",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +36,18 @@ dev = [
     "pytest>=9.2",
     "ruff>=0.17",
 ]
+
+# NVIDIA GPUs: take PyTorch from the CUDA 13 index (RTX 50xx needs CUDA 12.8+).
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [project.scripts]
 factshorts = "factshorts.cli:app"
