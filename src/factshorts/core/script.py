@@ -13,7 +13,7 @@ from factshorts.config import ScriptConfig, TTSConfig
 from factshorts.core.llm import LLM
 from factshorts.models import Claim as ClaimModel
 from factshorts.models import ClaimType, Idea, SceneType, Script, Segment, SourceDoc
-from factshorts.verify.normalize import split_paragraphs, split_sentences
+from factshorts.verify.normalize import normalize_chars, split_paragraphs, split_sentences
 
 log = logging.getLogger(__name__)
 
@@ -140,8 +140,9 @@ only the new scenes.{avoid}"""
 POLISH_PROMPT = """This script passed fact-checking. Now make it flow like one story that a
 curious 12-year-old enjoys from start to end: natural transitions between sentences and scenes,
 simpler words, varied sentence openings, technical terms explained simply.
-Keep every fact, number and name exactly as it is, keep each sentence's source_quotes
-unchanged, add no new facts, and keep the same segments in the same order. Return the full
+If two sentences say the same thing, keep only the better one. Keep every remaining fact,
+number and name exactly as it is, keep each sentence's source_quotes unchanged, add no new
+facts, and keep the same segments in the same order. Return the full
 script JSON."""
 
 
@@ -402,6 +403,34 @@ def _repeats(seg: Segment, script: Script) -> bool:
     existing = [t.casefold() for s in script.segments for t in split_sentences(s.narration)]
     new = [t.casefold() for t in split_sentences(seg.narration)]
     return bool(new) and all(any(fuzz.ratio(n, e) >= 85 for e in existing) for n in new)
+
+
+def dedupe_script(script: Script, min_scenes: int) -> tuple[Script, int]:
+    """Remove sentences that repeat an earlier one (with their claims) and scenes left without
+    any fact. The outro is kept as it is. Returns the script and how many sentences went."""
+    script = script.model_copy(deep=True)
+    seen = [normalize_chars(t).casefold() for t in split_sentences(script.outro.narration)]
+    removed = 0
+    for seg in [script.hook, *script.scenes]:
+        kept: list[str] = []
+        for t in split_sentences(seg.narration):
+            key = normalize_chars(t).casefold()
+            if any(fuzz.ratio(key, s) >= 85 for s in seen):
+                removed += 1
+                continue
+            kept.append(t)
+            seen.append(key)
+        seg.narration = " ".join(kept)
+        keep_keys = {normalize_chars(t).casefold() for t in kept}
+        seg.claims = [c for c in seg.claims if normalize_chars(c.text).casefold() in keep_keys]
+    factual = [s for s in script.scenes if s.narration and s.claims]
+    if len(factual) >= min_scenes:
+        script.scenes = factual
+    else:
+        script.scenes = [s for s in script.scenes if s.narration]
+    if not script.hook.narration and script.scenes:
+        script.hook = script.scenes.pop(0).model_copy(update={"visual": "title"})
+    return script.assign_ids(), removed
 
 
 def script_to_json(script: Script) -> str:

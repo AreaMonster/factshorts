@@ -50,8 +50,10 @@ RULES
   places or people); describe what things LOOK like instead.
 - First write subject_look: how the main subject of the video looks, using only appearance
   details from SOURCE CONTEXT (colors, clouds, surface, shape). If SOURCE CONTEXT does not say,
-  keep it plain. Set shows_subject = true for shots where the main subject is visible; its
-  look is then added to the prompt automatically, so do not describe it again.
+  keep it plain. Also say what it does NOT have that drawings often add by mistake
+  (e.g. "no rings, no moons" for a planet without them). Set shows_subject = true for shots
+  where the main subject is visible; its look is then added to the prompt automatically, so do
+  not describe it again.
 - Describe a picture of a place, landscape, object or action. Never an infographic: no
   charts, graphs, timelines, columns, icons, maps, pins, diagrams or labels.
 - No text, letters, numbers, signs, flags or logos anywhere in the picture.
@@ -82,16 +84,21 @@ problems. Same rules: no names, no text/numbers/labels/flags, no infographics, n
 narration or the subject description does not support. The main subject looks like this
 (include it if the subject is visible): {subject_look}"""
 
-REVIEW_PROMPT = """This illustration is for an educational video about {title}.
+REVIEW_PROMPT = """This illustration is for an educational cartoon-style video about {title}.
 The main subject looks like: {subject_look}
 It is shown while the narrator says: "{narration}"
 Intended picture: {prompt}
 
-Describe briefly what the picture shows. Then list every problem: the wrong object (a
-different planet, landmark or animal; features the subject does not have, such as rings or
-Earth's continents on another planet), any text, letters, numbers, labels, flags or logos,
-realistic depictions of identifiable people, or details that contradict the narration.
-A simple, stylized picture is fine. matches = true only if there are no problems."""
+Describe briefly what the picture shows. Then list only CLEAR problems:
+- the wrong object (a different planet, landmark or animal), or features the subject definitely
+  does not have (e.g. rings or moons around a planet that has none, Earth's continents on
+  another planet);
+- any text, letters, numbers, labels, flags or logos;
+- realistic depictions of identifiable people;
+- something that plainly contradicts the narration.
+Do NOT count as problems: the flat cartoon style, simplification, exact color shades, missing
+details, or a general picture for a sentence without facts (such as "Thanks for watching!").
+matches = true when there are no clear problems."""
 
 BANNED = re.compile(
     r"\d|[\"“”]|\b(text|texts|label|labels|labeled|labelled|letter|letters|number|"

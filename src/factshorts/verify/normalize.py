@@ -106,7 +106,8 @@ def split_sentences(text: str) -> list[str]:
     start = 0
     for m in _SENT_END.finditer(text):
         candidate = text[start : m.start()].strip()
-        last_word = re.search(r"(?<![°\w])([\w.]+)[.!?]$", candidate)
+        # The last word before the stop; "Earth's." is not an initial like "J."
+        last_word = re.search(r"(?<![°\w'’])([\w.]+)[.!?]$", candidate)
         if last_word:
             word = last_word.group(1).rstrip(".").lower()
             if word in _ABBREV or re.fullmatch(r"[a-z]", word):

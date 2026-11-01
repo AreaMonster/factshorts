@@ -243,3 +243,20 @@ def test_failing_scene_inserted_mid_story_by_extension_is_dropped(
     text = " ".join(s.narration for s in final.segments)
     assert "9,000 riders" not in text and "150 km/h" in text
     assert any("dropped 1 new scene" in m for m in log)
+
+
+def test_dedupe_removes_repeats_and_fact_free_scenes(script: Script) -> None:
+    from factshorts.core.script import dedupe_script
+    from factshorts.models import Segment
+
+    s = script.model_copy(deep=True)
+    repeat = s.scenes[0].model_copy(deep=True)  # same sentence again later
+    stray = Segment(narration="Follow for more facts.", on_screen_text="", visual="title")
+    s.scenes += [repeat, stray]
+    s.assign_ids()
+    out, removed = dedupe_script(s, min_scenes=3)
+    texts = [x.narration for x in out.scenes]
+    assert removed == 2  # the repeated sentence and the stray sign-off (same as the outro)
+    assert texts.count(script.scenes[0].narration) == 1
+    assert len(out.scenes) == len(script.scenes)
+    assert out.outro.narration == script.outro.narration

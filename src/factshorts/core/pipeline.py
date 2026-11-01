@@ -15,7 +15,12 @@ from factshorts.core.art import ImageReviewer
 from factshorts.core.export import export, source_label
 from factshorts.core.http import CachedHttp
 from factshorts.core.llm import LLM, OllamaLLM
-from factshorts.core.script import ScriptWriter, generate_script, replace_segment
+from factshorts.core.script import (
+    ScriptWriter,
+    dedupe_script,
+    generate_script,
+    replace_segment,
+)
 from factshorts.core.sourcing import SourcingError, resolve_wikipedia
 from factshorts.core.tts import Synthesizer, build_audio, make_synth
 from factshorts.core.visuals import VisualBuilder
@@ -313,6 +318,19 @@ class Pipeline:
         # 4. Editing pass for flow; edited segments are kept only if they still pass.
         if self.cfg.script.polish:
             script, result, n = self._polish(script, result, writer, verifier, wd, n, notify)
+
+        # 5. Remove repeated sentences and scenes left without a fact.
+        deduped, removed = dedupe_script(script, self.cfg.script.min_scenes)
+        if removed or len(deduped.scenes) != len(script.scenes):
+            n += 1
+            check = verifier.verify(deduped, attempt=n)
+            wd.write_model(f"verification_attempt{n}.json", check)
+            if check.passed:
+                notify(
+                    "verification",
+                    f"removed {removed} repeated sentence(s); {len(deduped.scenes)} scenes",
+                )
+                script, result = deduped, check
         wd.write_model("script.json", script)
         wd.write_model("verification.json", result)
         notify(

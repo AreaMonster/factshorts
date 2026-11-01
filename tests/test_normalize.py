@@ -120,3 +120,11 @@ def test_round_to() -> None:
     assert round_to(8848.86, 100) == 8800
     assert round_to(8850, 100) == 8900
     assert round_to(8.84886, 0.1) == pytest.approx(8.8)
+
+
+def test_split_after_possessive() -> None:
+    assert split_sentences("It is 92 times Earth's. This turns it into a fluid.") == [
+        "It is 92 times Earth's.",
+        "This turns it into a fluid.",
+    ]
+    assert split_sentences("Ask J. Smith. He knows.") == ["Ask J. Smith.", "He knows."]
