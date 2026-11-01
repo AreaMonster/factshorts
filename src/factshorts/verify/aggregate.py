@@ -27,7 +27,7 @@ from factshorts.verify.llm_judge import Judge
 from factshorts.verify.nli import NLIModel, nli_check
 from factshorts.verify.normalize import normalize_chars, split_paragraphs, split_sentences
 from factshorts.verify.programmatic import entity_check, has_checkable_entities, quote_check
-from factshorts.verify.wikidata_check import wikidata_check
+from factshorts.verify.wikidata_check import is_about_subject, wikidata_check
 
 CHECK_FLAGS = {
     "quote": "quote_check",
@@ -43,8 +43,9 @@ def enabled_checks(cfg: VerificationConfig) -> list[str]:
 
 
 def subject_names(source: SourceDoc) -> set[str]:
-    """Words of the article title (e.g. 'Mount', 'Everest') may be named anywhere."""
-    return {w for w in re.findall(r"[\wÀ-ɏ]+", source.title) if len(w) > 2}
+    """Words of the article titles (e.g. 'Mount', 'Everest') may be named anywhere."""
+    titles = [source.title, *(r.title for r in source.parts)]
+    return {w for t in titles for w in re.findall(r"[\wÀ-ɏ]+", t) if len(w) > 2}
 
 
 def _link(sentence: str, claim_text: str) -> bool:
@@ -64,7 +65,8 @@ class Verifier:
         source: SourceDoc,
         nli: NLIModel | None = None,
         judge: Judge | None = None,
-        wikidata_values: dict[str, list[WDValue]] | None = None,
+        # Wikidata values per document title (comparison ideas have two documents).
+        wikidata_values: dict[str, dict[str, list[WDValue]]] | None = None,
     ) -> None:
         self.cfg = cfg
         self.source = source
@@ -253,9 +255,7 @@ class Verifier:
                     CheckResult(check="wikidata", status="skipped", reason="Wikidata unavailable")
                 )
             else:
-                results.append(
-                    wikidata_check(text, title, self.wikidata_values, cfg.wikidata_properties, cfg)
-                )
+                results.append(self._wikidata(text))
         early_fail = early_fail or any(r.status == "fail" for r in results)
         if cfg.nli_check:
             if early_fail:
@@ -280,6 +280,21 @@ class Verifier:
                 results.append(self.judge.judge_claim(text, quote, paragraph, title))
         self._claims[key] = (results, paragraph)
         return results, paragraph
+
+    def _wikidata(self, text: str) -> CheckResult:
+        """Check against the document the claim is about; ambiguous claims are not checked."""
+        assert self.wikidata_values is not None
+        docs = self.wikidata_values
+        if len(docs) > 1:
+            docs = {t: v for t, v in docs.items() if is_about_subject(text, t, pronouns=False)}
+        if len(docs) != 1:
+            return CheckResult(
+                check="wikidata",
+                status="na",
+                reason="claim is not clearly about one of the articles",
+            )
+        title, values = next(iter(docs.items()))
+        return wikidata_check(text, title, values, self.cfg.wikidata_properties, self.cfg)
 
     # --- sentences ---------------------------------------------------------------------
 

@@ -193,7 +193,7 @@ def _verifier(
         source,
         nli=nli or FakeNLI(),
         judge=Judge(llm, "judge"),
-        wikidata_values=values if values is not None else {},
+        wikidata_values={source.title: values} if values else {},
     )
 
 

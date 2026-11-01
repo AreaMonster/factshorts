@@ -35,6 +35,10 @@ class Idea(BaseModel):
     source_file: str | None = None
     origin: Literal["custom", "auto"] = "custom"
     topic: str | None = None
+    article: str | None = None  # Wikipedia article already resolved (auto ideas)
+    angle: str | None = None
+    # Set when the idea's premise was false and the user chose a corrected video.
+    correction: str | None = None
 
 
 # --- Sources ---------------------------------------------------------------
@@ -46,8 +50,24 @@ class Section(BaseModel):
     text: str
 
 
+class SourceRef(BaseModel):
+    """One article/document behind a source (comparison ideas combine two)."""
+
+    title: str
+    url: str | None = None
+    revision_id: int | None = None
+    wikidata_id: str | None = None
+    language: str = "en"
+
+    @property
+    def revision_url(self) -> str | None:
+        if self.revision_id is None:
+            return self.url
+        return f"https://{self.language}.wikipedia.org/w/index.php?oldid={self.revision_id}"
+
+
 class SourceDoc(BaseModel):
-    kind: Literal["wikipedia", "user"]
+    kind: Literal["wikipedia", "user", "none"]  # none: opinion video without fact-check
     title: str
     url: str | None = None
     language: str = "en"
@@ -57,6 +77,22 @@ class SourceDoc(BaseModel):
     sections: list[Section]
     sha256: str
     fetched_at: datetime = Field(default_factory=utcnow)
+    parts: list[SourceRef] = Field(default_factory=list)  # empty = a single document
+
+    @property
+    def refs(self) -> list[SourceRef]:
+        """Every document behind this source (itself, or the merged parts)."""
+        if self.parts:
+            return self.parts
+        return [
+            SourceRef(
+                title=self.title,
+                url=self.url,
+                revision_id=self.revision_id,
+                wikidata_id=self.wikidata_id,
+                language=self.language,
+            )
+        ]
 
     @property
     def text(self) -> str:
@@ -153,6 +189,7 @@ class Verification(BaseModel):
     passed: bool
     failures: list[str] = Field(default_factory=list)
     attempt: int = 1
+    factcheck_off: bool = False  # the user turned fact-checking off: always UNVERIFIED
 
     @property
     def skipped_checks(self) -> list[str]:
@@ -166,7 +203,7 @@ class Verification(BaseModel):
 
     @property
     def label(self) -> Literal["VERIFIED", "PARTIALLY_VERIFIED", "UNVERIFIED"]:
-        if not self.passed:
+        if not self.passed or self.factcheck_off:
             return "UNVERIFIED"
         return "PARTIALLY_VERIFIED" if self.skipped_checks else "VERIFIED"
 

@@ -100,6 +100,8 @@ def script_to_llm(script: Script) -> LLMScript:
 JUDGE_DEFAULTS = {
     "ClaimJudgement": {"reason": "stated in the excerpt", "verdict": "SUPPORTED"},
     "FillerJudgement": {"reason": "a transition", "states_a_fact": False},
+    "Presuppositions": {"statements": []},
+    "PremiseJudgement": {"reason": "stated", "verdict": "SUPPORTED", "source_sentence": ""},
 }
 
 
@@ -242,5 +244,5 @@ class FakeWiki:
 
         return [SearchHit(title=self.doc.title, snippet="", page_id=1)]
 
-    def fetch(self, title: str) -> SourceDoc:
+    def fetch(self, title: str, focus: str | None = None) -> SourceDoc:
         return self.doc

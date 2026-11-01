@@ -333,3 +333,53 @@ def round_to(value: float, precision: float) -> float:
     if precision <= 0:
         return value
     return math.floor(value / precision + 0.5) * precision
+
+
+# --- keywords -------------------------------------------------------------------
+
+STOPWORDS = {
+    "a",
+    "an",
+    "the",
+    "why",
+    "how",
+    "what",
+    "which",
+    "who",
+    "when",
+    "where",
+    "is",
+    "are",
+    "was",
+    "were",
+    "do",
+    "does",
+    "did",
+    "so",
+    "of",
+    "in",
+    "on",
+    "at",
+    "to",
+    "and",
+    "or",
+    "it",
+    "its",
+    "can",
+    "really",
+    "actually",
+    "there",
+    "that",
+    "this",
+    "be",
+    "has",
+    "have",
+    "about",
+    "for",
+}
+
+
+def normalize_title(text: str) -> str:
+    """Lowercase, no punctuation, no filler words: 'Why is Venus so hot?' → 'venus hot'."""
+    words = re.findall(r"[\wÀ-ɏ]+", text.lower())
+    return " ".join(w for w in words if w not in STOPWORDS)

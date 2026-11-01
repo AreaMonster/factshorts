@@ -27,6 +27,9 @@ language = "en"
 user_agent = "factshorts/0.1 (local fact-video tool; contact: you@example.com)"
 # Claims come from the lead plus this many following sections (best-maintained text).
 max_sections = 3
+# Plus up to this many later sections that best match the idea's keywords (e.g. "Visibility
+# from space" for "Is the Great Wall visible from space?").
+focus_sections = 2
 skip_sections = ["See also", "References", "Notes", "External links", "Further reading", "Bibliography", "Sources", "Citations"]
 search_limit = 5
 
@@ -72,6 +75,9 @@ snap_quote_min_ratio = 80
 conversion_tolerance = 0.005
 # Rounds of targeted scene rewrites before a failing scene is dropped (or the idea rejected).
 max_rewrite_rounds = 3
+# Before writing, check what the idea takes for granted; if the source contradicts it, the job
+# waits for you (needs_input): make a corrected video or cancel.
+premise_check = true
 max_script_attempts = 3
 require_review = true
 # Local entailment model (CPU). The claim must be entailed by its quote/paragraph with at
@@ -197,6 +203,11 @@ device = "cuda"
 review_images = true
 review_model = ""
 max_redraws = 2
+
+[ideas]
+# Topics for automatically generated ideas (`factshorts batch`, `factshorts make --topic`).
+topics = ["space", "human body", "animals", "geography", "history", "technology", "Switzerland"]
+per_topic = 2
 
 [output]
 # Relative paths resolve against data_dir.

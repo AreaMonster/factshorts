@@ -36,7 +36,10 @@ def slugify(text: str, max_len: int = 48) -> str:
 
 def source_label(source: SourceDoc) -> str:
     if source.kind == "wikipedia":
-        return f"Source: Wikipedia, “{source.title}”"
+        titles = " and ".join(f"“{r.title}”" for r in source.refs)
+        return f"Source: Wikipedia, {titles}"
+    if source.kind == "none":
+        return "Opinion video: not fact-checked"
     return f"Source: {source.title}"
 
 
@@ -91,6 +94,16 @@ def build_sources_json(
             "sha256": source.sha256,
             "license": WIKIPEDIA_LICENSE if source.kind == "wikipedia" else None,
             "user_source": source.kind == "user",
+            "documents": [
+                {
+                    "title": r.title,
+                    "url": r.url,
+                    "revision_id": r.revision_id,
+                    "revision_url": r.revision_url,
+                    "wikidata_id": r.wikidata_id,
+                }
+                for r in source.refs
+            ],
         },
         "enabled_checks": verification.enabled_checks if verification else [],
         "claims": claims,
@@ -123,10 +136,11 @@ def build_description(
         lines += ["", f"PARTIALLY VERIFIED: these checks did not run: {', '.join(not_run)}."]
     lines += ["", "Sources:"]
     if source.kind == "wikipedia":
-        lines.append(
-            f"- Wikipedia, “{source.title}” (revision {source.revision_id}): {source.revision_url}"
-        )
+        for r in source.refs:
+            lines.append(f"- Wikipedia, “{r.title}” (revision {r.revision_id}): {r.revision_url}")
         lines.append(f"  Text license: {WIKIPEDIA_LICENSE}")
+    elif source.kind == "none":
+        lines.append("- none (opinion/creative video, not fact-checked)")
     else:
         lines.append(f"- {source.title}" + (f": {source.url}" if source.url else ""))
     note = ai_visuals_note(visuals)
@@ -230,7 +244,7 @@ def export(
         "tone": idea.tone,
         "duration_s": render.duration,
         "voice": audio.voice,
-        "source_links": [source.revision_url] if source.revision_url else [],
+        "source_links": [r.revision_url for r in source.refs if r.revision_url],
         "image_credits": [],
         "ai_generated_visuals": bool(visuals and visuals.mode != "off" and visuals.scenes),
         "status": "pending",

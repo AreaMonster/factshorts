@@ -14,14 +14,15 @@ from factshorts.config import Config
 from factshorts.core.art import ImageReviewer
 from factshorts.core.export import export, source_label
 from factshorts.core.http import CachedHttp
+from factshorts.core.ideas import IdeaStore
 from factshorts.core.llm import LLM, OllamaLLM
+from factshorts.core.premise import PremiseResult, check_premise
 from factshorts.core.script import (
     ScriptWriter,
     dedupe_script,
-    generate_script,
     replace_segment,
 )
-from factshorts.core.sourcing import SourcingError, resolve_wikipedia
+from factshorts.core.sourcing import SourcingError, resolve_source
 from factshorts.core.tts import Synthesizer, build_audio, make_synth
 from factshorts.core.visuals import VisualBuilder
 from factshorts.core.workdir import WorkDir
@@ -49,9 +50,10 @@ from factshorts.verify.nli import NLIModel, TransformersNLI
 
 log = logging.getLogger(__name__)
 
-STEPS = ["sourcing", "script", "verification", "voice", "visuals", "render", "export"]
+STEPS = ["sourcing", "premise", "script", "verification", "voice", "visuals", "render", "export"]
 STEP_OUTPUT = {
     "sourcing": "source.json",
+    "premise": "premise.json",
     "script": "script.json",
     "verification": "verification.json",
     "voice": "audio/audio.json",
@@ -67,6 +69,10 @@ class Rejected(RuntimeError):
     """The idea cannot be turned into a verified video; reason is user-facing."""
 
 
+class NeedsInput(RuntimeError):
+    """The job waits for the user (e.g. the idea's premise is false)."""
+
+
 @dataclass
 class Services:
     llm: LLM | None = None
@@ -74,6 +80,7 @@ class Services:
     synth_factory: Callable[[], Synthesizer] | None = None
     visuals_factory: Callable[[Theme], VisualBuilder] | None = None
     nli_factory: Callable[[], NLIModel] | None = None
+    http: CachedHttp | None = None
     wikidata: Wikidata | None = None
     _synth: Synthesizer | None = field(default=None, init=False)
     _nli: NLIModel | None = field(default=None, init=False)
@@ -114,6 +121,7 @@ def default_services(cfg: Config, db: Database) -> Services:
             cfg.verification.nli_model, cfg.verification.nli_device
         ),
         wikidata=Wikidata(http),
+        http=http,
     )
 
 
@@ -125,12 +133,48 @@ class Pipeline:
         self._verifier_for: Path | None = None
         self._verifier_cache: Verifier | None = None
 
-    def create_job(self, idea: Idea) -> str:
+    def create_job(self, idea: Idea, idea_id: int | None = None) -> str:
+        """Start a job. The idea is registered in the idea store (raises DuplicateIdea for a
+        repeat unless idea.force), or `idea_id` points at an idea already queued there."""
+        store = IdeaStore(self.db)
+        if idea_id is None:
+            idea_id = store.add(idea, article=idea.article, angle=idea.angle, status="processing")
+        else:
+            store.set_status(idea_id, "processing")
         job_id = new_job_id()
-        self.db.create_job(job_id, idea.model_dump())
+        self.db.create_job(job_id, idea.model_dump(), idea_id)
         wd = self.workdir(job_id)
         wd.write_model("idea.json", idea)
         return job_id
+
+    def _set_idea_status(self, job_id: str, status: str) -> None:
+        row = self.db.get_job(job_id)
+        if row is not None and row["idea_id"] is not None:
+            IdeaStore(self.db).set_status(row["idea_id"], status)
+
+    def answer(self, job_id: str, choice: str) -> None:
+        """Answer a job waiting in needs_input: 'corrected' or 'cancel'."""
+        row = self.db.get_job(job_id)
+        if row is None or row["state"] != "needs_input":
+            raise ValueError(f"job {job_id} is not waiting for an answer")
+        wd = self.workdir(job_id)
+        premise = wd.read_model("premise.json", PremiseResult)
+        if choice == "cancel":
+            premise.resolution = "cancelled"
+            wd.write_model("premise.json", premise)
+            reason = "false premise: " + premise.correction_note()
+            self.db.update_job(job_id, state="cancelled", error=reason)
+            self.db.add_rejection(wd.read_model("idea.json", Idea).text, reason, job_id, "premise")
+            self._set_idea_status(job_id, "cancelled")
+            return
+        if choice != "corrected":
+            raise ValueError("answer must be 'corrected' or 'cancel'")
+        premise.resolution = "corrected"
+        premise.correction = premise.correction_note()
+        wd.write_model("premise.json", premise)
+        self.db.set_step(job_id, "premise", "done")
+        self.db.set_step_hash(job_id, "premise", self._input_hash(wd, "premise"))
+        self.db.update_job(job_id, state="queued", error=None)
 
     def workdir(self, job_id: str) -> WorkDir:
         return WorkDir(self.cfg.work_dir / job_id)
@@ -158,12 +202,21 @@ class Pipeline:
                     # so the fingerprint that counts for resuming is the one after the step.
                     self.db.set_step_hash(job_id, step, self._input_hash(wd, step))
                     log.info("[%s] step %s done", job_id, step)
+            except NeedsInput as exc:
+                message = str(exc)
+                log.info("[%s] needs input: %s", job_id, message)
+                self.db.set_step(job_id, self._current(job_id), "needs_input", error=message)
+                self.db.update_job(job_id, state="needs_input", error=message)
+                self._set_idea_status(job_id, "needs_input")
+                notify("needs_input", message)
+                return None
             except (Rejected, SourcingError) as exc:
                 reason = str(exc)
                 log.warning("[%s] rejected: %s", job_id, reason)
                 self.db.set_step(job_id, self._current(job_id), "failed", error=reason)
                 self.db.update_job(job_id, state="rejected", error=reason)
                 self.db.add_rejection(idea.text, reason, job_id, self._current(job_id))
+                self._set_idea_status(job_id, "rejected")
                 notify("rejected", reason)
                 return None
             except Exception as exc:
@@ -174,6 +227,7 @@ class Pipeline:
                 notify("failed", message)
                 raise
             self.db.update_job(job_id, state="done", current_step=None)
+            self._set_idea_status(job_id, "done")
             return wd.read_model("export.json", ExportResult)
 
     # --- resume support ------------------------------------------------------
@@ -205,11 +259,64 @@ class Pipeline:
 
     def _step_sourcing(self, job_id: str, idea: Idea, wd: WorkDir, notify: ProgressFn) -> None:
         assert self.services.wiki is not None and self.services.llm is not None
-        source = resolve_wikipedia(
-            idea, self.services.wiki, self.services.llm, self.cfg.ollama.writer_model
-        )
-        notify("sourcing", f"Wikipedia: {source.title} (revision {source.revision_id})")
+        try:
+            source = resolve_source(
+                idea,
+                self.services.wiki,
+                self.services.llm,
+                self.cfg.ollama.writer_model,
+                self.services.http,
+            )
+        except SourcingError:
+            if idea.factcheck:
+                raise
+            source = SourceDoc(kind="none", title="", sections=[], sha256="")
+            notify("sourcing", "no source found; opinion video without fact-check (UNVERIFIED)")
+            wd.write_model("source.json", source)
+            return
+        if source.kind == "user":
+            notify("sourcing", f"your source: {source.title} ({len(source.text.split())} words)")
+        else:
+            refs = ", ".join(f"{r.title} (revision {r.revision_id})" for r in source.refs)
+            notify("sourcing", f"Wikipedia: {refs}")
         wd.write_model("source.json", source)
+
+    def _step_premise(self, job_id: str, idea: Idea, wd: WorkDir, notify: ProgressFn) -> None:
+        source = wd.read_model("source.json", SourceDoc)
+        if not idea.factcheck or source.kind == "none" or not self.cfg.verification.premise_check:
+            wd.write_model("premise.json", PremiseResult(checked=False))
+            return
+        assert self.services.llm is not None
+        result = check_premise(
+            idea,
+            source,
+            self.services.llm,
+            self.cfg.ollama.writer_model,
+            self.cfg.ollama.judge_model,
+        )
+        wd.write_model("premise.json", result)
+        if result.contradicted:
+            raise NeedsInput(
+                result.question() + "\nAnswer with: factshorts answer "
+                f"{job_id} corrected   (or: cancel)"
+            )
+        notify("premise", f"{len(result.items)} assumption(s) checked, none contradicted")
+
+    def _writer(self, idea: Idea, wd: WorkDir) -> ScriptWriter:
+        assert self.services.llm is not None
+        premise = (
+            wd.read_model("premise.json", PremiseResult) if wd.exists("premise.json") else None
+        )
+        note = premise.correction if premise and premise.resolution == "corrected" else None
+        return ScriptWriter(
+            idea,
+            wd.read_model("source.json", SourceDoc),
+            self.services.llm,
+            self.cfg.ollama.writer_model,
+            self.cfg.script,
+            self.cfg.tts,
+            note,
+        )
 
     def _step_script(
         self,
@@ -219,17 +326,7 @@ class Pipeline:
         notify: ProgressFn,
         feedback: list[str] | None = None,
     ) -> Script:
-        assert self.services.llm is not None
-        source = wd.read_model("source.json", SourceDoc)
-        script = generate_script(
-            idea,
-            source,
-            self.services.llm,
-            self.cfg.ollama.writer_model,
-            self.cfg.script,
-            self.cfg.tts,
-            feedback=feedback,
-        )
+        script = self._writer(idea, wd).draft(feedback)
         notify(
             "script", f"{script.title!r}: {len(script.scenes)} scenes, {script.word_count()} words"
         )
@@ -244,16 +341,22 @@ class Pipeline:
             return self._verifier_cache
         source = wd.read_model("source.json", SourceDoc)
         vcfg = self.cfg.verification
-        values = None
-        if vcfg.wikidata_check and self.services.wikidata and source.wikidata_id:
-            try:
-                values = self.services.wikidata.statements(
-                    source.wikidata_id, list(vcfg.wikidata_properties)
-                )
-            except Exception as exc:  # network problems must not pass silently
-                log.warning("Wikidata unavailable: %s", exc)
-        elif vcfg.wikidata_check and not source.wikidata_id:
-            values = {}  # no Wikidata item: the check does not apply
+        values: dict | None = {}  # no Wikidata items: the check does not apply
+        refs = [r for r in source.refs if r.wikidata_id]
+        if vcfg.wikidata_check and refs:
+            if self.services.wikidata is None:
+                values = None
+            else:
+                try:
+                    values = {
+                        r.title: self.services.wikidata.statements(
+                            r.wikidata_id, list(vcfg.wikidata_properties)
+                        )
+                        for r in refs
+                    }
+                except Exception as exc:  # network problems must not pass silently
+                    log.warning("Wikidata unavailable: %s", exc)
+                    values = None
         judge = None
         if vcfg.llm_judge and self.services.llm is not None:
             judge = Judge(self.services.llm, self.cfg.ollama.judge_model)
@@ -266,14 +369,16 @@ class Pipeline:
         assert self.services.llm is not None
         source = wd.read_model("source.json", SourceDoc)
         script = wd.read_model("script.json", Script)
-        writer = ScriptWriter(
-            idea,
-            source,
-            self.services.llm,
-            self.cfg.ollama.writer_model,
-            self.cfg.script,
-            self.cfg.tts,
-        )
+        if not idea.factcheck:
+            wd.write_model(
+                "verification.json",
+                Verification(
+                    enabled_checks=[], claims=[], sentences=[], passed=True, factcheck_off=True
+                ),
+            )
+            notify("verification", "fact-check turned off: the video is labeled UNVERIFIED")
+            return
+        writer = self._writer(idea, wd)
         verifier = self._verifier(wd)
         n = 1
         result = verifier.verify(script, attempt=n)
@@ -449,7 +554,7 @@ class Pipeline:
         audio = build_audio(
             script, self.services.synth(), self.cfg.tts, wd.subdir("audio"), self.cfg.cache_dir
         )
-        need = self.cfg.script.min_duration_s if idea.length >= 60 else 0.0
+        need = self.cfg.script.min_duration_s if idea.length >= 60 and idea.factcheck else 0.0
         for _ in range(self.cfg.script.max_topups):
             if audio.duration >= need:
                 break
@@ -476,15 +581,7 @@ class Pipeline:
     ) -> Script:
         """Add verified scenes worth about `seconds` of speech; unverifiable ones are dropped."""
         assert self.services.llm is not None
-        source = wd.read_model("source.json", SourceDoc)
-        writer = ScriptWriter(
-            idea,
-            source,
-            self.services.llm,
-            self.cfg.ollama.writer_model,
-            self.cfg.script,
-            self.cfg.tts,
-        )
+        writer = self._writer(idea, wd)
         # New scenes are inserted mid-story and renumber the ids, so tell them apart by text.
         before = {s.narration for s in script.scenes}
         extra_words = int(seconds * self.cfg.script.words_per_minute / 60)

@@ -109,9 +109,21 @@ FACT RULES (strict)
     image. The hook and outro use "title".
 Reply with JSON only."""
 
+CREATIVE_PROMPT = """You write scripts for vertical videos (TikTok, YouTube Shorts) that are \
+about {length} seconds long. This is an opinion, story or creative video and it is NOT
+fact-checked, so do not state specific facts, numbers, dates or names as true; present things
+as opinions, ideas, questions or a story. Leave every source_quotes list empty.
+
+Tell ONE engaging story or argument with natural transitions, plain words for a curious
+12-year-old, and no repeated points. Write exactly {scenes} scenes of 2-3 sentences (about
+{wps} words each) with on_screen_text of at most 8 words; a 1-2 sentence hook and a short
+outro; about {budget} words in total. Tone: {tone_desc}. visual per scene, one of:
+big_number, comparison, timeline, map_pin, icon_list, quote, image (hook and outro: "title").
+Write story_plan first. Reply with JSON only."""
+
 USER_PROMPT = """IDEA: {idea}
 
-SOURCE ({title}, Wikipedia):
+SOURCE ({title}):
 {source}"""
 
 REWRITE_PROMPT = """Segment {seg_id} of the script failed fact-checking:
@@ -227,13 +239,21 @@ class ScriptWriter:
     """Holds the conversation with the LLM so follow-up calls (top-ups) keep the context."""
 
     def __init__(
-        self, idea: Idea, source: SourceDoc, llm: LLM, model: str, cfg: ScriptConfig, tts: TTSConfig
+        self,
+        idea: Idea,
+        source: SourceDoc,
+        llm: LLM,
+        model: str,
+        cfg: ScriptConfig,
+        tts: TTSConfig,
+        note: str | None = None,
     ) -> None:
         self.idea, self.source, self.llm, self.model, self.cfg = idea, source, llm, model, cfg
         self.budget = word_budget(idea.length, cfg, tts)
         self.scenes = target_scenes(idea.length, cfg)
         self.wps = max(8, round((self.budget - 22) / self.scenes))  # hook ~14 + outro ~8
-        system = SYSTEM_PROMPT.format(
+        template = SYSTEM_PROMPT if idea.factcheck else CREATIVE_PROMPT
+        system = template.format(
             length=idea.length,
             budget=self.budget,
             scenes=self.scenes,
@@ -242,9 +262,16 @@ class ScriptWriter:
         )
         user = USER_PROMPT.format(
             idea=idea.text,
-            title=source.title,
-            source=format_source(source, cfg.max_source_words),
+            title=f"{source.title}, Wikipedia"
+            if source.kind == "wikipedia"
+            else f"{source.title}, provided by the user",
+            source=format_source(source, cfg.max_source_words) or "(none)",
         )
+        if note:
+            user += (
+                f"\n\nIMPORTANT: {note} Make the video gently correct this misconception "
+                "using SOURCE, and never present the false assumption as true."
+            )
         self.base = [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
     def draft(self, feedback: list[str] | None = None) -> Script:

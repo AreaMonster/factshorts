@@ -37,9 +37,9 @@ GENERIC_TITLE_WORDS = {
 }
 
 
-def is_about_subject(sentence: str, title: str) -> bool:
+def is_about_subject(sentence: str, title: str, pronouns: bool = True) -> bool:
     low = normalize_chars(sentence).lower()
-    if re.match(r"^(it|its|it's|this)\b", low):
+    if pronouns and re.match(r"^(it|its|it's|this)\b", low):
         return True
     words = [
         w

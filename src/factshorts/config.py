@@ -41,6 +41,7 @@ class WikipediaConfig(_Section):
     language: str = "en"
     user_agent: str = "factshorts/0.1 (local fact-video tool; contact: you@example.com)"
     max_sections: int = 3
+    focus_sections: int = 2  # extra sections chosen by how well they match the idea
     skip_sections: list[str] = Field(
         default_factory=lambda: [
             "See also",
@@ -132,6 +133,7 @@ class VerificationConfig(_Section):
     conversion_tolerance: float = 0.005
     # Rounds of targeted scene rewrites before a failing scene is dropped (or the idea rejected).
     max_rewrite_rounds: int = 3
+    premise_check: bool = True  # stop with needs_input if the source contradicts the idea
     max_script_attempts: int = 3
     require_review: bool = True
     nli_model: str = "MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli"
@@ -194,6 +196,21 @@ class VisualsConfig(_Section):
     max_redraws: int = 2
 
 
+class IdeasConfig(_Section):
+    topics: list[str] = Field(
+        default_factory=lambda: [
+            "space",
+            "human body",
+            "animals",
+            "geography",
+            "history",
+            "technology",
+            "Switzerland",
+        ]
+    )
+    per_topic: int = 2  # auto ideas per topic in a batch run
+
+
 class OutputConfig(_Section):
     dir: str = "output"
 
@@ -216,6 +233,7 @@ class Config(BaseModel):
     tts: TTSConfig = Field(default_factory=TTSConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
     visuals: VisualsConfig = Field(default_factory=VisualsConfig)
+    ideas: IdeasConfig = Field(default_factory=IdeasConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     web: WebConfig = Field(default_factory=WebConfig)
 
