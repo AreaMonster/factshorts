@@ -51,6 +51,9 @@ max_topups = 2
 # After fact-checking, an editing pass smooths transitions and simplifies words. Edited scenes
 # are verified again and only kept if they still pass.
 polish = true
+# Sentences that only repeat an earlier one in other words are removed when the NLI model says
+# an earlier sentence entails them with at least this probability. 0 = exact repeats only.
+repeat_entailment = 0.75
 # Videos targeting 60 s or more are extended with extra scenes until the narration is at
 # least this long (TikTok Creator Rewards only pays for videos longer than 1 minute).
 min_duration_s = 62.0

@@ -355,3 +355,59 @@ def test_editing_pass_cannot_move_facts_between_segments(
         (pipeline.workdir(job_id).root / "script.json").read_text("utf-8")
     )
     assert [s.narration for s in final.scenes] == [s.narration for s in script.scenes]
+
+
+def _story(*sentences_per_scene: str) -> Script:
+    from factshorts.models import Claim, Segment
+
+    def seg(text: str) -> Segment:
+        from factshorts.verify.normalize import split_sentences
+
+        return Segment(
+            narration=text,
+            on_screen_text="",
+            claims=[Claim(text=t, source_quote="q") for t in split_sentences(text)],
+        )
+
+    return Script(
+        title="Venus",
+        hook=seg("Venus is hotter than Mercury."),
+        scenes=[seg(t) for t in sentences_per_scene],
+        outro=Segment(narration="Thanks for watching!", on_screen_text=""),
+    ).assign_ids()
+
+
+def test_reworded_repeat_is_removed_with_entailment() -> None:
+    from factshorts.core.script import dedupe_script
+
+    pairs = {
+        (
+            "The atmosphere has thick clouds that span the whole planet.",
+            "These clouds cover the entire planet.",
+        ): 0.98
+    }
+    script = _story(
+        "The atmosphere has thick clouds that span the whole planet.",
+        "These clouds cover the entire planet.",
+        "Its pressure is 92 times Earth's.",
+        "Its day lasts 243 Earth days.",
+    )
+    out, removed = dedupe_script(script, 3, lambda p, h: pairs.get((p, h), 0.1), 0.75)
+    assert removed == 1
+    assert "cover the entire planet" not in " ".join(s.narration for s in out.segments)
+    assert len(out.scenes) == 3
+
+
+def test_contained_sentence_is_a_repeat_but_numbers_keep_sentences_apart() -> None:
+    from factshorts.core.script import dedupe_script
+
+    script = _story(
+        "At the surface it reaches 464 °C, making it the hottest planet in the solar system.",
+        "This makes Venus the hottest planet in the solar system.",
+        "Venus orbits 108 million km from the Sun.",
+        "Mercury orbits 58 million km from the Sun.",
+    )
+    out, removed = dedupe_script(script, 3, None, subject_words={"venus", "mercury"})
+    text = " ".join(s.narration for s in out.segments)
+    assert removed == 1 and "This makes Venus the hottest" not in text
+    assert "108 million" in text and "58 million" in text

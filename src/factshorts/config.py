@@ -70,6 +70,9 @@ class ScriptConfig(_Section):
     max_scenes: int = 16
     max_topups: int = 2
     polish: bool = True  # editing pass for flow after fact-checking (re-verified)
+    # A sentence counts as a repeat if an earlier sentence entails it with this probability
+    # (NLI model); 0 = only near-identical text counts.
+    repeat_entailment: float = 0.75
     # Videos targeting >= 60 s must end up at least this long (TikTok pays for > 1 minute).
     min_duration_s: float = 62.0
     max_json_retries: int = 3

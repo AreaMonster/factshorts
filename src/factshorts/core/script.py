@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 
 from pydantic import BaseModel, Field
 from rapidfuzz import fuzz
@@ -13,7 +14,12 @@ from factshorts.config import ScriptConfig, TTSConfig
 from factshorts.core.llm import LLM
 from factshorts.models import Claim as ClaimModel
 from factshorts.models import ClaimType, Idea, SceneType, Script, Segment, SourceDoc
-from factshorts.verify.normalize import normalize_chars, split_paragraphs, split_sentences
+from factshorts.verify.normalize import (
+    normalize_chars,
+    normalize_title,
+    split_paragraphs,
+    split_sentences,
+)
 
 log = logging.getLogger(__name__)
 
@@ -432,21 +438,45 @@ def _repeats(seg: Segment, script: Script) -> bool:
     return bool(new) and all(any(fuzz.ratio(n, e) >= 85 for e in existing) for n in new)
 
 
-def dedupe_script(script: Script, min_scenes: int) -> tuple[Script, int]:
+def dedupe_script(
+    script: Script,
+    min_scenes: int,
+    entails: Callable[[str, str], float] | None = None,
+    threshold: float = 0.75,
+    subject_words: set[str] | None = None,
+) -> tuple[Script, int]:
     """Remove sentences that repeat an earlier one (with their claims) and scenes left without
-    any fact. The outro is kept as it is. Returns the script and how many sentences went."""
+    any fact. The outro is kept as it is. Returns the script and how many sentences went.
+
+    A sentence repeats an earlier one if it is nearly the same text, or, with `entails` (an NLI
+    model's entailment probability for premise → hypothesis), if an earlier sentence already
+    says everything it says, in other words ("the clouds span the whole planet" → "these
+    clouds cover the entire planet")."""
     script = script.model_copy(deep=True)
-    seen = [normalize_chars(t).casefold() for t in split_sentences(script.outro.narration)]
+    ignore = _stems(script.title) | _stems(" ".join(subject_words or ()))
+    seen = [(normalize_chars(t).casefold(), t) for t in split_sentences(script.outro.narration)]
     removed = 0
     for seg in [script.hook, *script.scenes]:
         kept: list[str] = []
         for t in split_sentences(seg.narration):
             key = normalize_chars(t).casefold()
-            if any(fuzz.ratio(key, s) >= 85 for s in seen):
+            # Near-identical text is a repeat, unless the numbers differ ("58 million km" vs
+            # "108 million km" in a comparison).
+            same = any(fuzz.ratio(key, k) >= 85 and _numbers(key) == _numbers(k) for k, _ in seen)
+            if not same:
+                same = any(_contained(t, prev, ignore) for _, prev in seen)
+            if not same and entails is not None:
+                # Only pairs that share some words are worth asking the model about.
+                same = any(
+                    entails(prev, t) >= threshold
+                    for k, prev in seen
+                    if fuzz.token_set_ratio(key, k) >= 40
+                )
+            if same:
                 removed += 1
                 continue
             kept.append(t)
-            seen.append(key)
+            seen.append((key, t))
         seg.narration = " ".join(kept)
         keep_keys = {normalize_chars(t).casefold() for t in kept}
         seg.claims = [c for c in seg.claims if normalize_chars(c.text).casefold() in keep_keys]
@@ -458,6 +488,28 @@ def dedupe_script(script: Script, min_scenes: int) -> tuple[Script, int]:
     if not script.hook.narration and script.scenes:
         script.hook = script.scenes.pop(0).model_copy(update={"visual": "title"})
     return script.assign_ids(), removed
+
+
+def _stems(text: str) -> set[str]:
+    """Content words with crude suffix stripping: 'makes'/'making' → 'mak'."""
+    out = set()
+    for w in normalize_title(text).split():
+        for suffix in ("ing", "es", "ed", "s", "e"):
+            if len(w) > 4 and w.endswith(suffix):
+                w = w[: -len(suffix)]
+                break
+        out.add(w)
+    return out
+
+
+def _numbers(text: str) -> list[str]:
+    return re.findall(r"\d+(?:[.,]\d+)*", text)
+
+
+def _contained(sentence: str, earlier: str, ignore: set[str]) -> bool:
+    """Every content word of `sentence` (at least 4, subject names aside) is in `earlier`."""
+    words = _stems(sentence) - ignore
+    return len(words) >= 4 and words <= _stems(earlier)
 
 
 def script_to_json(script: Script) -> str:

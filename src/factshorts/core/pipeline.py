@@ -44,7 +44,7 @@ from factshorts.render.renderer import render_video
 from factshorts.render.themes import Theme, load_theme
 from factshorts.sources.wikidata import Wikidata
 from factshorts.sources.wikipedia import Wikipedia
-from factshorts.verify.aggregate import Verifier
+from factshorts.verify.aggregate import Verifier, subject_names
 from factshorts.verify.llm_judge import Judge
 from factshorts.verify.nli import NLIModel, TransformersNLI
 from factshorts.verify.normalize import normalize_chars
@@ -426,7 +426,14 @@ class Pipeline:
             script, result, n = self._polish(script, result, writer, verifier, wd, n, notify)
 
         # 5. Remove repeated sentences and scenes left without a fact.
-        deduped, removed = dedupe_script(script, self.cfg.script.min_scenes)
+        nli = self.services.nli() if self.cfg.verification.nli_check else None
+        entails = None
+        if nli is not None and self.cfg.script.repeat_entailment:
+            entails = lambda p, h: nli.scores(p, h).get("entailment", 0.0)  # noqa: E731
+        names = {w.lower() for w in subject_names(source)}
+        deduped, removed = dedupe_script(
+            script, self.cfg.script.min_scenes, entails, self.cfg.script.repeat_entailment, names
+        )
         if removed or len(deduped.scenes) != len(script.scenes):
             n += 1
             check = verifier.verify(deduped, attempt=n)
