@@ -231,5 +231,8 @@ dir = "output"
 [web]
 host = "127.0.0.1"
 port = 8000
-# argon2 hash; required for any non-localhost host.
+# argon2 hash; required for any non-localhost host. Set it with `factshorts password`
+# or on the Settings page (stored in the database, like every change made in the UI).
 password_hash = ""
+# Jobs processed at the same time. With one GPU keep 1 (models would fight for VRAM).
+workers = 1

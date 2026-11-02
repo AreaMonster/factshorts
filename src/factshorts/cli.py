@@ -8,7 +8,7 @@ from typing import Annotated, Any
 
 import typer
 
-from factshorts.config import Config, load_config
+from factshorts.config import Config, apply_overrides, load_config
 from factshorts.db import Database
 from factshorts.logging_setup import setup_logging
 from factshorts.models import Idea
@@ -25,13 +25,17 @@ app.add_typer(queue_app, name="queue")
 
 
 def _bootstrap(config: Path | None) -> tuple[Config, Database]:
+    """config.toml plus the settings changed in the Web UI, so both behave the same."""
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    cfg = load_config(config)
+    base = load_config(config)
+    base.ensure_dirs()
+    db = Database(base.db_path)
+    cfg = apply_overrides(base, db.get_settings())
     cfg.ensure_dirs()
     setup_logging(cfg.logs_dir, cfg.general.log_level, console=False)
-    return cfg, Database(cfg.db_path)
+    return cfg, db
 
 
 def _progress(step: str, message: str) -> None:
@@ -369,6 +373,68 @@ def queue_clear(config: ConfigOpt = None) -> None:
 
     _, db = _bootstrap(config)
     typer.echo(f"Cleared {IdeaStore(db).clear()} queued idea(s).")
+
+
+@app.command()
+def ui(
+    host: Annotated[str | None, typer.Option(help="Address to listen on (default: config)")] = None,
+    port: Annotated[int | None, typer.Option(help="Port (default from config)")] = None,
+    config: ConfigOpt = None,
+) -> None:
+    """Start the Web UI (http://127.0.0.1:8000 by default)."""
+    import uvicorn
+
+    from factshorts.core.doctor import is_local_host
+    from factshorts.web.app import create_app
+
+    cfg, db = _bootstrap(config)
+    host = host or cfg.web.host
+    port = port or cfg.web.port
+    if not is_local_host(host) and not cfg.web.password_hash:
+        _fail(
+            f"Refusing to listen on {host}: other devices could reach the UI, so a password is "
+            "required. Set one with `factshorts password` (or on the Settings page)."
+        )
+    base = load_config(config)
+    app_ = create_app(base, db)
+    shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    typer.echo(f"factshorts UI on http://{shown}:{port}  (Ctrl+C to stop)")
+    uvicorn.run(app_, host=host, port=port, log_level="warning")
+
+
+@app.command()
+def doctor(config: ConfigOpt = None) -> None:
+    """Check the setup: Python, ffmpeg, Ollama and models, voice, NLI model, folders, config."""
+    from factshorts.core.doctor import run_checks
+
+    cfg, _ = _bootstrap(config)
+    checks = run_checks(cfg)
+    marks = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL"}
+    for c in checks:
+        typer.echo(f"[{marks[c.status]}] {c.name:<17} {c.detail}")
+    failed = [c for c in checks if c.status == "fail"]
+    typer.echo(f"\n{len(failed)} problem(s)." if failed else "\nAll good.")
+    raise typer.Exit(1 if failed else 0)
+
+
+@app.command()
+def password(
+    remove: Annotated[bool, typer.Option("--remove", help="Remove the password")] = False,
+    config: ConfigOpt = None,
+) -> None:
+    """Set the Web UI password (needed to open the UI from another device)."""
+    from argon2 import PasswordHasher
+
+    _, db = _bootstrap(config)
+    if remove:
+        db.delete_setting("web.password_hash")
+        typer.echo("Password removed. The UI now only works on this computer.")
+        return
+    pw = typer.prompt("New password", hide_input=True, confirmation_prompt=True)
+    if len(pw) < 8:
+        _fail("Use at least 8 characters.")
+    db.set_setting("web.password_hash", PasswordHasher().hash(pw))
+    typer.echo("Password set.")
 
 
 def _run(pipeline: Any, job_id: str) -> int:

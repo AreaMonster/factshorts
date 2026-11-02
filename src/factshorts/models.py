@@ -257,6 +257,7 @@ class SceneVisual(BaseModel):
     image: str | None = None  # file name in work/<job>/visuals
     clip: str | None = None  # background clip with exactly `frames` frames
     review: str = ""  # vision check outcome, e.g. "ok", "redrawn 1x", "fallback: ..."
+    narration: str = ""  # what the picture was made (and checked) for; lets edits reuse it
 
 
 class VisualsPlan(BaseModel):
@@ -264,6 +265,7 @@ class VisualsPlan(BaseModel):
     style: str = ""
     models: dict[str, str] = Field(default_factory=dict)
     scenes: list[SceneVisual] = Field(default_factory=list)
+    look: str = ""  # the subject's look the art director chose (for redraws)
 
     def clip_for(self, segment_id: str) -> str | None:
         return next((s.clip for s in self.scenes if s.segment_id == segment_id), None)

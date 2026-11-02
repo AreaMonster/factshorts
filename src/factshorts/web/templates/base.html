@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}factshorts{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js"></script>
+  <script src="/static/sse.js"></script>
+</head>
+<body hx-boost="false">
+  <header class="top">
+    <a class="brand" href="/create">fact<span>shorts</span></a>
+    <nav>
+      {% for key, label in [("create", "Create"), ("jobs", "Jobs"), ("review", "Review"), ("library", "Library"), ("settings", "Settings")] %}
+      <a href="/{{ key }}" class="{{ 'active' if nav == key else '' }}">{{ label }}</a>
+      {% endfor %}
+    </nav>
+    {% if login %}
+    <form method="post" action="/logout"><button class="small" type="submit">Log out</button></form>
+    {% endif %}
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

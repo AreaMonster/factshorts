@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -74,6 +75,10 @@ class Rejected(RuntimeError):
 
 class NeedsInput(RuntimeError):
     """The job waits for the user (e.g. the idea's premise is false)."""
+
+
+class Cancelled(RuntimeError):
+    """The user cancelled the job; raised from the progress callback between stages."""
 
 
 @dataclass
@@ -214,6 +219,12 @@ class Pipeline:
                     # so the fingerprint that counts for resuming is the one after the step.
                     self.db.set_step_hash(job_id, step, self._input_hash(wd, step))
                     log.info("[%s] step %s done", job_id, step)
+            except Cancelled:
+                log.info("[%s] cancelled by the user", job_id)
+                self.db.set_step(job_id, self._current(job_id), "cancelled", error="cancelled")
+                self.db.update_job(job_id, state="cancelled", error="cancelled by the user")
+                self._set_idea_status(job_id, "cancelled")
+                return None
             except NeedsInput as exc:
                 message = str(exc)
                 log.info("[%s] needs input: %s", job_id, message)
@@ -288,6 +299,104 @@ class Pipeline:
         }
         wd.write_model("idea.json", idea.model_copy(update=updates))
         self.db.update_job(job_id, state="queued", error=None)
+
+    def edit_segment(
+        self,
+        job_id: str,
+        seg_id: str,
+        narration: str,
+        on_screen_text: str | None = None,
+        notify: ProgressFn | None = None,
+    ) -> list[str]:
+        """Replace one segment's narration with the user's wording. The segment alone is
+        fact-checked; if it passes, the change is saved and `run` redoes voice onward (unchanged
+        scenes reuse their cached audio and pictures). Returns the problems if it fails."""
+        notify = notify or (lambda step, msg: None)
+        wd, idea, script = self._editable(job_id)
+        old = next(s for s in script.segments if s.id == seg_id)
+        if idea.factcheck:
+            notify("edit", f"finding source quotes for the new {seg_id} narration")
+            new = self._writer(idea, wd).annotate(script, seg_id, narration)
+        else:
+            new = Segment(narration=" ".join(narration.split()), on_screen_text="")
+        new = new.model_copy(
+            update={
+                "on_screen_text": old.on_screen_text if on_screen_text is None else on_screen_text,
+                "visual": old.visual,
+                "image_prompt": old.image_prompt,
+                "motion": old.motion,
+            }
+        )
+        candidate = replace_segment(script.model_copy(deep=True), seg_id, new)
+        return self._apply_edit(job_id, wd, idea, candidate, seg_id, notify)
+
+    def regenerate_segment(
+        self, job_id: str, seg_id: str, notify: ProgressFn | None = None
+    ) -> list[str]:
+        """Let the writer make a fresh, fact-checked version of one segment (up to
+        max_rewrite_rounds attempts). Returns the problems if no version passed."""
+        notify = notify or (lambda step, msg: None)
+        wd, idea, script = self._editable(job_id)
+        writer = self._writer(idea, wd)
+        header = (
+            f"The user wants a new version of segment {seg_id}: different wording, and a "
+            "different fact from SOURCE if one fits the story better. Current version:"
+        )
+        problems = [next(s for s in script.segments if s.id == seg_id).narration]
+        for attempt in range(1, self.cfg.verification.max_rewrite_rounds + 1):
+            notify("edit", f"writing a new {seg_id} (attempt {attempt})")
+            candidate = writer.rewrite_segment(
+                script.model_copy(deep=True), seg_id, problems, header
+            )
+            problems = self._apply_edit(job_id, wd, idea, candidate, seg_id, notify)
+            if not problems:
+                return []
+            header = f"Segment {seg_id} of the script failed fact-checking:"
+        return problems
+
+    def _editable(self, job_id: str) -> tuple[WorkDir, Idea, Script]:
+        row = self.db.get_job(job_id)
+        if row is None:
+            raise ValueError(f"no job {job_id}")
+        wd = self.workdir(job_id)
+        if not (wd.exists("script.json") and self._is_done(job_id, "verification", wd)):
+            raise ValueError("the script of this job is not finished yet")
+        return wd, wd.read_model("idea.json", Idea), wd.read_model("script.json", Script)
+
+    def _apply_edit(
+        self,
+        job_id: str,
+        wd: WorkDir,
+        idea: Idea,
+        script: Script,
+        seg_id: str,
+        notify: ProgressFn,
+    ) -> list[str]:
+        verification = wd.read_model("verification.json", Verification)
+        if idea.factcheck:
+            notify("edit", f"fact-checking {seg_id}")
+            check = self._verifier(wd).verify(script, only={seg_id})
+            if not check.passed:
+                for f in check.failures:
+                    log.info("  - %s", f)
+                return check.failures
+            verification = merge_verification(verification, check, script, seg_id)
+        new = next(s for s in script.segments if s.id == seg_id)
+        wd.write_model("script.json", script)
+        wd.write_model("verification.json", verification)
+        # The script is checked: keep the verification step from re-running its rewrites.
+        self.db.set_step_hash(job_id, "verification", self._input_hash(wd, "verification"))
+        if wd.exists("visuals/visuals.json"):
+            # The scene keeps its picture; the vision check looks at it again for the new text.
+            plan = wd.read_model("visuals/visuals.json", VisualsPlan)
+            for sc in plan.scenes:
+                if sc.segment_id == seg_id:
+                    sc.narration, sc.review = new.narration, ""
+            wd.write_model("visuals/visuals.json", plan)
+        self.db.update_job(job_id, state="queued", error=None)
+        log.info("[%s] %s changed: %s", job_id, seg_id, new.narration)
+        notify("edit", f"{seg_id} passed the checks: {new.narration}")
+        return []
 
     def _is_done(self, job_id: str, step: str, wd: WorkDir) -> bool:
         row = self.db.step_status(job_id, step)
@@ -701,6 +810,9 @@ class Pipeline:
                 unload_llm=getattr(llm, "unload_all", lambda: None),
                 notify=lambda msg: notify("visuals", msg),
                 source=wd.read_model("source.json", SourceDoc),
+                previous=wd.read_model("visuals/visuals.json", VisualsPlan)
+                if wd.exists("visuals/visuals.json")
+                else None,
             )
             kinds = [s.kind for s in plan.scenes]
             notify(
@@ -760,6 +872,13 @@ class Pipeline:
             thumbnail_base=thumb_base,
             theme=idea.theme or self.cfg.render.theme,
         )
+        old = self.db.get_video(job_id)
+        if old is not None and Path(old["folder"]) != Path(result.folder):
+            # A re-render replaces the job's earlier output; the new one waits for review.
+            folder = Path(old["folder"])
+            if folder.is_dir() and folder.resolve().is_relative_to(self.cfg.output_dir.resolve()):
+                shutil.rmtree(folder, ignore_errors=True)
+                notify("export", f"replaced the earlier version ({folder.name})")
         self.db.add_video(
             job_id,
             wd.read_model("script.json", Script).title,
@@ -773,6 +892,27 @@ class Pipeline:
 
 def _quotes(seg: Segment) -> set[str]:
     return {normalize_chars(c.source_quote).casefold() for c in seg.claims}
+
+
+def merge_verification(
+    old: Verification, new: Verification, script: Script, seg_id: str
+) -> Verification:
+    """`old` with the results for `seg_id` replaced by `new` (a check of that segment only)."""
+    order = {s.id: i for i, s in enumerate(script.segments)}
+    order["title"] = len(order)
+    claims = [c for c in old.claims if c.segment_id != seg_id] + new.claims
+    sentences = [s for s in old.sentences if s.segment_id != seg_id] + new.sentences
+    claims.sort(key=lambda c: order.get(c.segment_id, 99))
+    sentences.sort(key=lambda s: order.get(s.segment_id, 99))
+    failures = [f for f in old.failures if not f.startswith(f"{seg_id} ")] + new.failures
+    return old.model_copy(
+        update={
+            "claims": claims,
+            "sentences": sentences,
+            "failures": failures,
+            "passed": not failures,
+        }
+    )
 
 
 def failed_segments(result: Verification) -> set[str]:

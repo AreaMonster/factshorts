@@ -1,0 +1,11 @@
+<table>
+  <tbody>
+  {% for c in checks %}
+    <tr>
+      <td style="white-space:nowrap">{{ c.name }}</td>
+      <td><span class="badge {{ {'ok': 'ok', 'warn': 'warn'}.get(c.status, 'bad') }}">{{ c.status }}</span></td>
+      <td class="small">{{ c.detail }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>

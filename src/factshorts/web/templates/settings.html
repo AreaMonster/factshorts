@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Settings · factshorts{% endblock %}
+{% macro check(key, value, text) -%}
+<input type="hidden" name="bool:{{ key }}" value="1">
+<label class="check"><input type="checkbox" name="{{ key }}" {{ 'checked' if value }}> {{ text }}</label>
+{%- endmacro %}
+{% block content %}
+<h1>Settings</h1>
+{% if message %}<p class="notice ok">{{ message }}</p>{% endif %}
+{% if error %}<p class="notice error">{{ error }}</p>{% endif %}
+<p class="muted small">Changes are saved in the database and override <code>config.toml</code>, which stays as it is.
+{% if overrides %}Changed here: {{ overrides | list | reject("equalto", "web.password_hash") | join(", ") or "nothing" }}.{% endif %}</p>
+
+<div class="card">
+  <div class="row spread"><h2 style="margin:0">Health</h2>
+    <button class="small" hx-get="/settings/health" hx-target="#health" hx-indicator="#health-spin">Run checks</button></div>
+  <div id="health" hx-get="/settings/health" hx-trigger="load"><span id="health-spin" class="htmx-indicator muted small"><span class="spinner"></span> checking…</span></div>
+</div>
+
+<form method="post" action="/settings">
+  <div class="grid two">
+    <div class="card">
+      <h2 style="margin-top:0">Local LLM (Ollama)</h2>
+      <label for="ollama-url">Ollama URL (must be this computer)</label>
+      <input id="ollama-url" name="ollama.url" type="text" value="{{ cfg.ollama.url }}">
+      {% if models %}
+        {% for key, label in [("ollama.writer_model", "Writer model"), ("ollama.judge_model", "Judge model (fact-checking and pictures)")] %}
+        {% set current = cfg.ollama.writer_model if key.endswith("writer_model") else cfg.ollama.judge_model %}
+        <label for="{{ key }}">{{ label }}</label>
+        <select id="{{ key }}" name="{{ key }}">
+          {% if current not in models %}<option selected>{{ current }}</option>{% endif %}
+          {% for m in models %}<option {{ 'selected' if m == current }}>{{ m }}</option>{% endfor %}
+        </select>
+        {% endfor %}
+      {% else %}
+        <p class="notice warn small">Ollama is not reachable, so the model list is empty. Start Ollama and reload.</p>
+        <label for="w">Writer model</label><input id="w" name="ollama.writer_model" type="text" value="{{ cfg.ollama.writer_model }}">
+        <label for="j">Judge model</label><input id="j" name="ollama.judge_model" type="text" value="{{ cfg.ollama.judge_model }}">
+      {% endif %}
+      <p class="muted small">Use the largest model that fits your graphics card: about 8 GB VRAM → 7-8B models, 12-16 GB → 12-14B, 24 GB → up to about 30B (quantized). Bigger models follow the rules better and invent less.</p>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">Voice</h2>
+      <label for="engine">Engine</label>
+      <select id="engine" name="tts.engine">
+        {% for e in ["kokoro", "piper"] %}<option {{ 'selected' if e == cfg.tts.engine }}>{{ e }}</option>{% endfor %}
+      </select>
+      <label for="kvoice">Kokoro voice</label>
+      <div class="row">
+        <select id="kvoice" name="tts.voice" style="flex:1">
+          {% for v in kokoro_voices %}<option {{ 'selected' if v == cfg.tts.voice }}>{{ v }}</option>{% endfor %}
+        </select>
+        <button class="small" type="button" onclick="playPreview('kokoro', document.getElementById('kvoice').value)">▶ Preview</button>
+      </div>
+      <label for="pvoice">Piper voice</label>
+      <div class="row">
+        <input id="pvoice" name="tts.piper_voice" type="text" value="{{ cfg.tts.piper_voice }}" style="flex:1">
+        <button class="small" type="button" onclick="playPreview('piper', document.getElementById('pvoice').value)">▶ Preview</button>
+      </div>
+      <p class="muted small">Downloaded Piper voices: {{ piper_voices | join(", ") or "none" }}. Names look like <code>en_US-ryan-high</code> (see rhasspy/piper-voices).</p>
+      <audio id="preview" controls class="hidden" style="width:100%"></audio>
+      <p id="preview-status" class="muted small"></p>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">Fact-checking</h2>
+      {{ check("verification.quote_check", cfg.verification.quote_check, "Quote check") }}
+      {{ check("verification.entity_check", cfg.verification.entity_check, "Entity check (numbers, dates, names)") }}
+      {{ check("verification.wikidata_check", cfg.verification.wikidata_check, "Wikidata cross-check") }}
+      {{ check("verification.nli_check", cfg.verification.nli_check, "NLI entailment model") }}
+      {{ check("verification.llm_judge", cfg.verification.llm_judge, "LLM judge") }}
+      {{ check("verification.premise_check", cfg.verification.premise_check, "Stop on false premises") }}
+      <label for="nli">NLI entailment threshold (0-1)</label>
+      <input id="nli" name="verification.nli_threshold" type="number" step="0.05" min="0" max="1" value="{{ cfg.verification.nli_threshold }}">
+      <label for="rounds">Rewrite rounds before a failing scene is dropped</label>
+      <input id="rounds" name="verification.max_rewrite_rounds" type="number" min="0" max="6" value="{{ cfg.verification.max_rewrite_rounds }}">
+      <p class="muted small">Turning checks off makes videos PARTIALLY VERIFIED at best.</p>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">Defaults</h2>
+      <div class="grid two" style="gap:.5rem">
+        <div><label for="len">Length</label>
+          <select id="len" name="script.default_length">{% for n in lengths %}<option value="{{ n }}" {{ 'selected' if n == cfg.script.default_length }}>{{ n }} s</option>{% endfor %}</select></div>
+        <div><label for="tone">Tone</label>
+          <select id="tone" name="script.default_tone">{% for t in tones %}<option {{ 'selected' if t == cfg.script.default_tone }}>{{ t }}</option>{% endfor %}</select></div>
+        <div><label for="theme">Theme</label>
+          <select id="theme" name="render.theme">{% for t in themes %}<option {{ 'selected' if t == cfg.render.theme }}>{{ t }}</option>{% endfor %}</select></div>
+        <div><label for="per">Auto ideas per topic</label>
+          <input id="per" name="ideas.per_topic" type="number" min="0" max="10" value="{{ cfg.ideas.per_topic }}"></div>
+      </div>
+      {{ check("audio.music", cfg.audio.music, "Background music") }}
+      <label for="topics">Topics (one per line)</label>
+      <textarea id="topics" name="ideas.topics" rows="6">{{ cfg.ideas.topics | join("\n") }}</textarea>
+      <label for="out">Output folder</label>
+      <input id="out" name="output.dir" type="text" value="{{ cfg.output.dir }}">
+      <p class="muted small">Relative paths are inside the data folder ({{ cfg.data_dir }}).</p>
+    </div>
+  </div>
+  <p class="row"><button class="primary" type="submit">Save settings</button></p>
+</form>
+<form method="post" action="/settings/reset" onsubmit="return confirm('Undo every change made here and use config.toml again?')">
+  <button class="small" type="submit">Reset to config.toml</button>
+</form>
+
+<div class="grid two" style="margin-top:1rem">
+  <form class="card" method="post" action="/settings/piper-download">
+    <h2 style="margin-top:0">Download a Piper voice</h2>
+    <label for="pdl">Voice name</label>
+    <input id="pdl" name="voice" type="text" placeholder="en_US-lessac-high" required>
+    <p><button type="submit">Download</button></p>
+  </form>
+  <form class="card" method="post" action="/settings/password">
+    <h2 style="margin-top:0">Password</h2>
+    <p class="muted small">{{ "A password is set." if cfg.web.password_hash else "No password: the UI only works on this computer." }} A password is required to open the UI from another device (<code>factshorts ui --host 0.0.0.0</code>). Leave both fields empty to remove it.</p>
+    <label for="pw">New password</label><input id="pw" name="password" type="password" autocomplete="new-password">
+    <label for="pw2">Repeat</label><input id="pw2" name="confirm" type="password" autocomplete="new-password">
+    <p><button type="submit">Save password</button></p>
+  </form>
+</div>
+
+<script>
+function playPreview(engine, voice) {
+  const audio = document.getElementById("preview");
+  const status = document.getElementById("preview-status");
+  status.textContent = "Making a sample (the first time takes a few seconds)…";
+  audio.classList.remove("hidden");
+  audio.src = "/settings/voice-preview?engine=" + encodeURIComponent(engine) + "&voice=" + encodeURIComponent(voice);
+  audio.oncanplay = () => { status.textContent = ""; audio.play(); };
+  audio.onerror = () => { status.textContent = "Could not make a sample for this voice."; };
+}
+</script>
+{% endblock %}

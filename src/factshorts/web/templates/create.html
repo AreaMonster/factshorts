@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Create · factshorts{% endblock %}
+{% block content %}
+<h1>Create videos</h1>
+{% if message %}<p class="notice ok">{{ message }}</p>{% endif %}
+{% if error %}<p class="notice error">{{ error }}</p>{% endif %}
+
+<div class="grid two">
+  <form class="card" method="post" action="/create" enctype="multipart/form-data">
+    <h2 style="margin-top:0">Your ideas</h2>
+    <label for="ideas">One idea per line. Optional settings per line: <code>Why is Venus so hot? | length=60 | tone=funny</code></label>
+    <textarea id="ideas" name="ideas" rows="5" placeholder="How tall is Mount Everest?" required></textarea>
+
+    <details>
+      <summary>Use your own source (instead of Wikipedia)</summary>
+      <label for="source_url">Web page</label>
+      <input id="source_url" name="source_url" type="url" placeholder="https://...">
+      <label for="source_file">File (.txt, .md, .pdf)</label>
+      <input id="source_file" name="source_file" type="file" accept=".txt,.md,.pdf">
+      <label for="source_text">Or paste the text</label>
+      <textarea id="source_text" name="source_text" rows="4"></textarea>
+    </details>
+
+    <div class="grid three">
+      <div>
+        <label for="length">Length</label>
+        <select id="length" name="length">
+          {% for n in lengths %}<option value="{{ n }}" {{ 'selected' if n == cfg.script.default_length }}>{{ n }} s</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="tone">Tone</label>
+        <select id="tone" name="tone">
+          {% for t in tones %}<option {{ 'selected' if t == cfg.script.default_tone }}>{{ t }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="voice">Voice</label>
+        <select id="voice" name="voice">
+          {% for v in voices %}<option {{ 'selected' if v == cfg.tts.voice }}>{{ v }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="theme">Theme</label>
+        <select id="theme" name="theme">
+          {% for t in themes %}<option {{ 'selected' if t == cfg.render.theme }}>{{ t }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+    <label class="check"><input type="checkbox" name="music" {{ 'checked' if cfg.audio.music }}> Background music</label>
+    <label class="check"><input type="checkbox" name="factcheck" checked onchange="document.getElementById('fc-warn').classList.toggle('hidden', this.checked)"> Fact-check (recommended)</label>
+    <p id="fc-warn" class="notice warn hidden small">Without fact-checking the video is labeled <b>UNVERIFIED</b> in its file name, metadata and here. Use it only for opinions or stories.</p>
+    <label class="check"><input type="checkbox" name="force"> Make it even if it looks like a duplicate</label>
+    <p class="row">
+      <button class="primary" type="submit" name="action" value="make">Make now</button>
+      <button type="submit" name="action" value="queue">Add to inbox</button>
+    </p>
+  </form>
+
+  <div class="card">
+    <h2 style="margin-top:0">Generate ideas</h2>
+    <p class="muted small">The local LLM proposes ideas; each one is checked against Wikipedia (it needs a real article) and against your past ideas.</p>
+    <form hx-post="/ideas/generate" hx-target="#proposals" hx-indicator="#gen-spin">
+      <label>Topics</label>
+      <div class="row">
+        {% for t in cfg.ideas.topics %}
+        <label class="check"><input type="checkbox" name="topics" value="{{ t }}"> {{ t }}</label>
+        {% endfor %}
+      </div>
+      <label for="custom_topic">Another topic</label>
+      <input id="custom_topic" name="custom_topic" type="text" placeholder="volcanoes">
+      <label for="count">Ideas per topic</label>
+      <input id="count" name="count" type="number" min="1" max="10" value="3" style="max-width: 7rem">
+      <p class="row">
+        <button type="submit">Generate</button>
+        <span id="gen-spin" class="htmx-indicator muted small"><span class="spinner"></span> asking the LLM (up to a minute)...</span>
+      </p>
+    </form>
+    <div id="proposals"></div>
+  </div>
+</div>
+{% endblock %}

@@ -132,7 +132,7 @@ USER_PROMPT = """IDEA: {idea}
 SOURCE ({title}):
 {source}"""
 
-REWRITE_PROMPT = """Segment {seg_id} of the script failed fact-checking:
+REWRITE_PROMPT = """{header}
 - {problems}
 
 Rewrite only segment {seg_id} so that every sentence is fully supported by SOURCE (same rules:
@@ -154,6 +154,19 @@ Write {count} MORE scenes (same JSON fields and rules) with NEW facts from SOURC
 script does not use yet and that deepen the story. For each, set insert_after to the id of the
 segment it should follow so the story still flows (e.g. "s2"). Do not repeat any fact. Return
 only the new scenes.{avoid}"""
+
+ANNOTATE_PROMPT = """The user rewrote the narration of segment {seg_id} in their own words:
+{sentences}
+
+Do not change the wording. For each sentence, in the same order, give source_quotes: the complete
+SOURCE sentence(s) that prove it, copied character-for-character without the [n] label. Leave
+source_quotes empty if the sentence states no fact, or if SOURCE does not say it (never quote
+something that only looks similar). Return every sentence with its text exactly as given."""
+
+
+class LLMQuotedSentences(BaseModel):
+    sentences: list[LLMSentence] = Field(min_length=1, max_length=8)
+
 
 POLISH_PROMPT = """This script passed fact-checking. Now make it flow like one story that a
 curious 12-year-old enjoys from start to end: natural transitions between sentences and scenes,
@@ -323,8 +336,11 @@ class ScriptWriter:
         script = fit_budget(best, self.budget, self.cfg)
         return self.top_up(script)
 
-    def rewrite_segment(self, script: Script, seg_id: str, problems: list[str]) -> Script:
-        """Targeted rewrite of one failing segment; the rest of the script stays as it is."""
+    def rewrite_segment(
+        self, script: Script, seg_id: str, problems: list[str], header: str | None = None
+    ) -> Script:
+        """Targeted rewrite of one failing segment; the rest of the script stays as it is.
+        `header` replaces the "failed fact-checking" intro (e.g. for a requested new version)."""
         role = "hook" if seg_id == "hook" else "outro" if seg_id == "outro" else "scene"
         segs = script.segments
         idx = next(i for i, x in enumerate(segs) if x.id == seg_id)
@@ -336,6 +352,7 @@ class ScriptWriter:
             {
                 "role": "user",
                 "content": REWRITE_PROMPT.format(
+                    header=header or f"Segment {seg_id} of the script failed fact-checking:",
                     seg_id=seg_id,
                     problems="\n- ".join(problems[:8]) or "unsupported",
                     role=ROLE_HINTS[role],
@@ -350,6 +367,39 @@ class ScriptWriter:
         new = to_segment(raw, "title" if role != "scene" else None)
         log.info("rewrote %s: %s", seg_id, new.narration)
         return replace_segment(script, seg_id, new)
+
+    def annotate(self, script: Script, seg_id: str, narration: str) -> Segment:
+        """The user's own wording for a segment, with the source quotes the LLM finds for each
+        sentence. The text is kept exactly; the checks then decide whether it is supported."""
+        sentences = [_end_sentence(t) for t in split_sentences(narration) if t.strip()]
+        if not sentences:
+            raise ValueError("the narration is empty")
+        messages = [
+            *self.base,
+            {"role": "assistant", "content": script_to_json(script)},
+            {
+                "role": "user",
+                "content": ANNOTATE_PROMPT.format(
+                    seg_id=seg_id,
+                    sentences="\n".join(f"{i}. {t}" for i, t in enumerate(sentences, 1)),
+                ),
+            },
+        ]
+        raw = self.llm.structured(
+            messages, LLMQuotedSentences, model=self.model, retries=self.cfg.max_json_retries
+        )
+        quoted = {i: x for i, x in enumerate(raw.sentences)}
+        claims = []
+        for i, text in enumerate(sentences):
+            x = quoted.get(i)
+            if x is None:
+                continue
+            claims += [
+                ClaimModel(text=text, source_quote=q.strip(), type=x.claim_type)
+                for q in x.source_quotes
+                if q.strip()
+            ]
+        return Segment(narration=" ".join(sentences), on_screen_text="", claims=claims)
 
     def polish(self, script: Script) -> Script:
         """Editing pass for flow and plain language. The result must be re-verified."""

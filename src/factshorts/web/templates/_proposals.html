@@ -1,0 +1,29 @@
+{% for e in errors %}<p class="error small">Could not generate ideas for {{ e }}</p>{% endfor %}
+{% if proposals %}
+<form method="post" action="/ideas/add">
+  <table>
+    <thead><tr><th></th><th>Idea (you can edit it)</th><th class="opt">Wikipedia</th></tr></thead>
+    <tbody>
+    {% for p in proposals %}
+      <tr>
+        <td><input type="checkbox" name="p-{{ loop.index }}-pick" checked aria-label="use this idea"></td>
+        <td>
+          <input type="text" name="p-{{ loop.index }}-text" value="{{ p.text }}">
+          <div class="muted small">{{ p.topic }} · {{ p.angle }}</div>
+          <input type="hidden" name="p-{{ loop.index }}-article" value="{{ p.article }}">
+          <input type="hidden" name="p-{{ loop.index }}-angle" value="{{ p.angle }}">
+          <input type="hidden" name="p-{{ loop.index }}-topic" value="{{ p.topic }}">
+        </td>
+        <td class="opt"><a href="https://en.wikipedia.org/wiki/{{ p.article | replace(' ', '_') }}" target="_blank" rel="noopener">{{ p.article }}</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="row">
+    <button class="primary" type="submit" name="action" value="queue">Add ticked to inbox</button>
+    <button type="submit" name="action" value="make">Make ticked now</button>
+  </p>
+</form>
+{% elif not errors %}
+<p class="muted">No new ideas: every candidate was a duplicate or had no Wikipedia article. Try again or another topic.</p>
+{% endif %}

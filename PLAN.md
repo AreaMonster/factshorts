@@ -271,3 +271,34 @@ Then Phase 2 (full verification) as planned.
 - **Found in the Venus sample:** comparison ideas ("Venus vs Mercury") need *both* articles.
   With only "Venus", every Mercury fact the writer added from memory was (correctly) rejected.
   → Phase 3 sourcing should fetch one article per compared subject.
+
+## 11. Phase 5 decisions (Web UI)
+
+- **One worker, tasks in SQLite.** Every UI action that takes time (make, edit, regenerate,
+  re-render, answer, batch) is a row in a `tasks` table, processed by a background worker
+  thread (`[web].workers`, default 1 because the GPU models must not run side by side).
+  After a restart, interrupted tasks are queued again and their jobs resume from the last
+  finished step. One task per job runs at a time.
+- **UI settings are stored in SQLite** (`settings` table) and layered over `config.toml`,
+  so the commented file is never rewritten. The CLI applies the same overrides, so both
+  behave identically. "Reset to config.toml" removes them; the data folder cannot be moved
+  from the UI.
+- **Edit narration:** the LLM only finds source quotes for the user's exact wording; then
+  that segment alone is fact-checked (`Verifier.verify(only=...)`). A failing edit is not
+  saved and the reasons are shown. A passing edit re-runs voice → visuals → render → export:
+  unchanged sentences come from the voice cache, and unchanged scenes keep their checked
+  pictures (the edited scene's picture is re-checked by the vision model against its new
+  text). Measured on a real job: the second edit took about 1 minute instead of about 10.
+  The whole video is re-encoded (fast: about 15 s for a minute of video).
+- **Regenerate scene:** the writer makes a new version of one segment, fact-checked the
+  same way, up to `max_rewrite_rounds` attempts.
+- **A re-render replaces the job's earlier output folder**; the new version waits in
+  `pending/` for review again.
+- **Live progress** uses Server-Sent Events with the vendored htmx SSE extension; the server
+  re-renders a small HTML fragment whenever it changes. Cancel takes effect at the next
+  checkpoint (between pipeline stages).
+- **Security:** localhost only by default; `factshorts ui --host 0.0.0.0` refuses to start
+  without a password (argon2 hash, session cookie, SameSite=strict). Cross-site form posts
+  are refused by an Origin check. Media files are served only from the video's own folder.
+- **Wikimedia Commons images** are not part of the UI: you chose AI illustrations, so the
+  Commons option from the spec is not implemented.

@@ -102,7 +102,10 @@ class VisualBuilder:
         unload_llm: Callable[[], None],
         notify: Notify,
         source: SourceDoc | None = None,
+        previous: VisualsPlan | None = None,
     ) -> VisualsPlan:
+        """With `previous` (the job's last plan in the same style), scenes whose narration did
+        not change keep their checked picture, so an edited video redraws only what changed."""
         v, fps = self.v, self.cfg.render.fps
         if v.mode == "off":
             return VisualsPlan(mode="off")
@@ -110,7 +113,14 @@ class VisualBuilder:
         self.names = set(subject_names(source)) if source else set()
         self.look = ""
         self.title = source.title if source else script.title
-        if llm is not None:
+        old: dict[str, SceneVisual] = {}
+        if previous is not None and previous.style == self.theme.art.style:
+            old = {s.narration: s for s in previous.scenes if s.narration}
+            self.look = previous.look
+        reuse = {s.id: old[s.narration] for s in shots.segments if s.narration in old}
+        if reuse:
+            notify(f"keeping {len(reuse)} checked picture(s) from the last render")
+        if llm is not None and len(reuse) < len(shots.segments):
             notify("planning illustrations")
             context = source.sections[0].text[:1500] if source and source.sections else ""
             _, self.look = plan_shots(
@@ -140,15 +150,19 @@ class VisualBuilder:
 
         ranges = segment_frame_ranges(audio, fps)
         kinds = choose_kinds(shots, v.mode, v.wan_scenes, v.wan_include_hook)
+        unchecked = "" if self.reviewer is not None and self.v.review_images else "not checked"
         scenes = [
             SceneVisual(
                 segment_id=s.id,
                 kind=kinds[s.id],  # type: ignore[arg-type]
                 frames=ranges[s.id][1] - ranges[s.id][0],
-                prompt=f"{s.image_prompt}. {self.theme.art.style}",
-                review="" if self.reviewer is not None and self.v.review_images else "not checked",
-                motion=s.motion,
-                seed=seed_for(job_id, s.id),
+                prompt=reuse[s.id].prompt
+                if s.id in reuse
+                else f"{s.image_prompt}. {self.theme.art.style}",
+                review=reuse[s.id].review if s.id in reuse else unchecked,
+                motion=reuse[s.id].motion if s.id in reuse else s.motion,
+                seed=reuse[s.id].seed if s.id in reuse else seed_for(job_id, s.id),
+                narration=s.narration,
             )
             for s in shots.segments
         ]
@@ -192,6 +206,7 @@ class VisualBuilder:
             style=self.theme.art.style,
             models={"image": v.image_model, "depth": v.depth_model, "video": v.video_model},
             scenes=scenes,
+            look=self.look,
         )
 
     # --- stages -----------------------------------------------------------------------

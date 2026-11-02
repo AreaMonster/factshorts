@@ -1,4 +1,4 @@
-"""SQLite storage: ideas, jobs, steps, videos, rejections and the HTTP cache."""
+"""SQLite storage: ideas, jobs, steps, videos, rejections, settings, tasks, HTTP cache."""
 
 from __future__ import annotations
 
@@ -60,6 +60,20 @@ CREATE TABLE IF NOT EXISTS rejections (
     step TEXT,
     reason TEXT NOT NULL,
     created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    state TEXT NOT NULL DEFAULT 'queued',
+    message TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS http_cache (
     key TEXT PRIMARY KEY,
@@ -172,6 +186,82 @@ class Database:
             " created_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
             (job_id, title, topic, folder, int(verified), time.time()),
         )
+
+    def get_video(self, job_id: str) -> sqlite3.Row | None:
+        rows = self.query("SELECT * FROM videos WHERE job_id = ?", (job_id,))
+        return rows[0] if rows else None
+
+    def update_video(self, job_id: str, **fields: Any) -> None:
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        self.execute(f"UPDATE videos SET {cols} WHERE job_id = ?", (*fields.values(), job_id))
+
+    def delete_video(self, job_id: str) -> None:
+        self.execute("DELETE FROM videos WHERE job_id = ?", (job_id,))
+
+    # --- settings (changes made in the Web UI, layered over config.toml) ------------
+
+    def get_settings(self) -> dict[str, Any]:
+        return {r["key"]: json.loads(r["value"]) for r in self.query("SELECT * FROM settings")}
+
+    def set_setting(self, key: str, value: Any) -> None:
+        self.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, json.dumps(value))
+        )
+
+    def delete_setting(self, key: str) -> None:
+        self.execute("DELETE FROM settings WHERE key = ?", (key,))
+
+    # --- tasks (the Web UI's work queue) ------------------------------------------
+
+    def add_task(self, kind: str, job_id: str | None = None, payload: dict | None = None) -> int:
+        now = time.time()
+        return self.execute(
+            "INSERT INTO tasks (job_id, kind, payload, state, created_at, updated_at)"
+            " VALUES (?, ?, ?, 'queued', ?, ?)",
+            (job_id, kind, json.dumps(payload or {}), now, now),
+        )
+
+    def get_task(self, task_id: int) -> sqlite3.Row | None:
+        rows = self.query("SELECT * FROM tasks WHERE id = ?", (task_id,))
+        return rows[0] if rows else None
+
+    def claim_task(self) -> sqlite3.Row | None:
+        """The oldest queued task whose job has no other task running; marked running."""
+        with self.tx() as conn:
+            row = conn.execute(
+                "SELECT * FROM tasks t WHERE state = 'queued' AND (job_id IS NULL OR NOT EXISTS"
+                " (SELECT 1 FROM tasks r WHERE r.job_id = t.job_id AND r.state IN"
+                " ('running', 'cancelling'))) ORDER BY id LIMIT 1"
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE tasks SET state = 'running', updated_at = ? WHERE id = ?",
+                (time.time(), row["id"]),
+            )
+        return self.get_task(row["id"])
+
+    def update_task(self, task_id: int, **fields: Any) -> None:
+        fields["updated_at"] = time.time()
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        self.execute(f"UPDATE tasks SET {cols} WHERE id = ?", (*fields.values(), task_id))
+
+    def job_tasks(self, job_id: str, active_only: bool = False) -> list[sqlite3.Row]:
+        extra = " AND state IN ('queued', 'running', 'cancelling')" if active_only else ""
+        return self.query(f"SELECT * FROM tasks WHERE job_id = ?{extra} ORDER BY id", (job_id,))
+
+    def requeue_interrupted(self) -> int:
+        """After a restart, tasks that were running start again (jobs resume)."""
+        rows = self.query("SELECT id FROM tasks WHERE state IN ('running', 'cancelling')")
+        self.execute(
+            "UPDATE tasks SET state = 'queued', updated_at = ? WHERE state = 'running'",
+            (time.time(),),
+        )
+        self.execute(
+            "UPDATE tasks SET state = 'cancelled', updated_at = ? WHERE state = 'cancelling'",
+            (time.time(),),
+        )
+        return len(rows)
 
     # --- http cache -----------------------------------------------------------
 

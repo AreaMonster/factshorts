@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "_macros.html" import label_badge %}
+{% block title %}Library · factshorts{% endblock %}
+{% block content %}
+<h1>Library</h1>
+<form class="card" method="get" action="/library">
+  <div class="grid three" style="gap:.6rem">
+    <div><label for="q">Search titles</label><input id="q" name="q" type="text" value="{{ q }}"></div>
+    <div><label for="topic">Topic</label>
+      <select id="topic" name="topic"><option value="">all</option>{% for t in topics %}<option {{ 'selected' if t == topic }}>{{ t }}</option>{% endfor %}</select></div>
+    <div><label for="verified">Fact-check</label>
+      <select id="verified" name="verified">
+        <option value="">all</option>
+        <option value="yes" {{ 'selected' if verified == 'yes' }}>verified</option>
+        <option value="no" {{ 'selected' if verified == 'no' }}>not verified</option>
+      </select></div>
+    <div><label for="since">Made since</label><input id="since" name="since" type="date" value="{{ since }}"></div>
+    <div><label for="status">Folder</label>
+      <select id="status" name="status">
+        {% for s in ["approved", "pending", "rejected"] %}<option {{ 'selected' if s == status }}>{{ s }}</option>{% endfor %}
+      </select></div>
+  </div>
+  <p><button type="submit">Filter</button></p>
+</form>
+
+{% if items %}
+<div class="grid three">
+  {% for it in items %}
+  {% set v = it.v %}
+  <div class="card video-card">
+    <a href="/review/{{ v.job_id }}">
+      {% if it.jpg %}<img class="thumb" src="/media/{{ v.job_id }}/{{ it.jpg }}" alt="" loading="lazy">{% else %}<div class="thumb"></div>{% endif %}
+    </a>
+    <h3><a href="/review/{{ v.job_id }}">{{ v.title }}</a></h3>
+    <div class="row small muted">{{ label_badge(v.verified) }} {{ v.topic or "" }} · {{ v.created_at | when }}</div>
+    <div class="row small" style="margin-top:.5rem">
+      {% if it.mp4 %}<a href="/media/{{ v.job_id }}/{{ it.mp4 }}?download=1">MP4</a>{% endif %}
+      {% if it.txt %}<a href="/media/{{ v.job_id }}/{{ it.txt }}?download=1">description</a>{% endif %}
+      <form class="inline" method="post" action="/library/{{ v.job_id }}/delete" onsubmit="return confirm('Delete this video and its files?')">
+        <button class="small danger" type="submit">Delete</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">No {{ status }} videos{{ " match these filters" if q or topic or verified or since }}.</p>
+{% endif %}
+{% endblock %}

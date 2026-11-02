@@ -1,0 +1,27 @@
+{% from "_macros.html" import state_badge, steps, label_badge %}
+{% if not jobs %}
+<p class="muted">No jobs yet. Start one on the <a href="/create">Create</a> page.</p>
+{% else %}
+<table>
+  <thead><tr><th>Idea</th><th>State</th><th class="opt">Progress</th><th class="opt">Updated</th></tr></thead>
+  <tbody>
+  {% for j in jobs %}
+    <tr>
+      <td>
+        <a href="/jobs/{{ j.id }}">{{ j.idea.text }}</a>
+        {% if not j.idea.factcheck %}<span class="badge bad">no fact-check</span>{% endif %}
+        {% if j.error and j.raw_state in ("rejected", "failed", "needs_input") %}
+        <div class="muted small">{{ j.error.splitlines()[0][:160] }}</div>
+        {% endif %}
+      </td>
+      <td>
+        {{ state_badge(j.state) }}
+        {% if j.video %}<div style="margin-top:.3rem"><a class="small" href="/review/{{ j.id }}">review</a> {{ label_badge(j.video.verified) }}</div>{% endif %}
+      </td>
+      <td class="opt">{{ steps(j) }}</td>
+      <td class="opt muted small">{{ j.updated | when }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}

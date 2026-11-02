@@ -231,6 +231,7 @@ class WebConfig(_Section):
     host: str = "127.0.0.1"
     port: int = 8000
     password_hash: str = ""
+    workers: int = 1  # jobs processed at the same time (one GPU: keep 1)
 
 
 class Config(BaseModel):
@@ -324,3 +325,22 @@ def load_config(path: Path | None = None) -> Config:
     cfg = Config.model_validate(raw)
     cfg.base_dir = path.resolve().parent
     return cfg
+
+
+# Settings the Web UI may change. They are stored in SQLite and layered over config.toml, so
+# the commented file stays as it is. The data folder itself cannot move from the UI.
+NOT_OVERRIDABLE = {"general.data_dir"}
+
+
+def apply_overrides(cfg: Config, overrides: dict[str, object]) -> Config:
+    """A copy of `cfg` with dotted-key overrides ("ollama.writer_model": "...") applied.
+    Unknown keys are ignored (a setting may have been removed); invalid values raise."""
+    data = cfg.model_dump()
+    for key, value in overrides.items():
+        section, _, name = key.partition(".")
+        if key in NOT_OVERRIDABLE or section not in data or name not in data[section]:
+            continue
+        data[section][name] = value
+    new = Config.model_validate(data)
+    new.base_dir = cfg.base_dir
+    return new

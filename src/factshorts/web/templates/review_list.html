@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% from "_macros.html" import label_badge %}
+{% block title %}Review · factshorts{% endblock %}
+{% block content %}
+<h1>Waiting for review</h1>
+<p class="muted">Local AI plus automatic fact-checks reduce mistakes but cannot rule them out. Watch each video and look at its claims before you approve it.</p>
+{% if videos %}
+<div class="card">
+<table>
+  <tbody>
+  {% for v in videos %}
+    <tr>
+      <td><a href="/review/{{ v.job_id }}">{{ v.title }}</a> <span class="muted small">{{ v.topic or "" }}</span></td>
+      <td>{{ label_badge(v.verified) }}</td>
+      <td class="muted small opt">{{ v.created_at | when }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">Nothing to review right now.</p>
+{% endif %}
+{% endblock %}

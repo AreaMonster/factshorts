@@ -107,8 +107,11 @@ class Verifier:
                     changed += 1
         return changed
 
-    def verify(self, script: Script, attempt: int = 1) -> Verification:
-        """Check every claim and sentence. Mis-copied quotes are snapped first (in place)."""
+    def verify(
+        self, script: Script, attempt: int = 1, only: set[str] | None = None
+    ) -> Verification:
+        """Check every claim and sentence. Mis-copied quotes are snapped first (in place).
+        With `only`, just those segments are checked (the title too is skipped)."""
         self.snap_quotes(script)
         cfg = self.cfg
         vocab = build_vocab(
@@ -122,6 +125,8 @@ class Verifier:
         all_evidence: list[str] = []
 
         for seg in script.segments:
+            if only is not None and seg.id not in only:
+                continue
             evidence_by_claim: dict[str, str] = {}
             for claim in seg.claims:
                 checks, paragraph = self._claim_checks(claim.text, claim.source_quote, vocab)
@@ -181,7 +186,7 @@ class Verifier:
                 if res.status == "fail":
                     failures.append(f"{seg.id} on-screen text '{seg.on_screen_text}': {res.reason}")
 
-        if cfg.entity_check:
+        if cfg.entity_check and only is None:
             res = entity_check(
                 script.title,
                 "\n".join(all_evidence),

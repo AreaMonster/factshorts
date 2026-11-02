@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job.id }} · factshorts{% endblock %}
+{% block content %}
+<p class="muted small"><a href="/jobs">← Jobs</a> · job {{ job.id }}</p>
+<h1>{{ job.idea.text }}</h1>
+<div hx-ext="sse" sse-connect="/jobs/{{ job.id }}/stream" sse-swap="job">
+  {{ live_html | safe }}
+</div>
+<p class="muted small">
+  Length {{ job.idea.length }} s · tone {{ job.idea.tone }}
+  {% if job.idea.source_url %}· source: {{ job.idea.source_url }}{% endif %}
+  {% if job.idea.source_file %}· source file{% endif %}
+  {% if job.idea.theme %}· theme {{ job.idea.theme }}{% endif %}
+  {% if job.idea.voice %}· voice {{ job.idea.voice }}{% endif %}
+  · <a href="/jobs/{{ job.id }}/log" target="_blank">full technical log</a>
+</p>
+{% endblock %}

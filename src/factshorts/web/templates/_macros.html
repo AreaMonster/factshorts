@@ -1,0 +1,22 @@
+{% macro state_badge(state) -%}
+{%- set cls = {"done": "ok", "running": "info", "working": "info", "queued": "muted", "needs_input": "warn"}.get(state, "bad") -%}
+<span class="badge {{ cls }}">{{ {"needs_input": "needs your answer", "working": "working"}.get(state, state) }}</span>
+{%- endmacro %}
+
+{% macro steps(job) -%}
+<div class="steps">
+  {% for name, status in job.steps %}
+  <span class="step {{ status }}" title="{{ status or 'not started' }}">{{ name }}</span>
+  {% endfor %}
+</div>
+{%- endmacro %}
+
+{% macro label_badge(verified, label=None) -%}
+{%- if label -%}
+<span class="badge {{ label | label_class }}">{{ label | replace("_", " ") }}</span>
+{%- elif verified -%}
+<span class="badge ok">VERIFIED</span>
+{%- else -%}
+<span class="badge bad">UNVERIFIED</span>
+{%- endif -%}
+{%- endmacro %}

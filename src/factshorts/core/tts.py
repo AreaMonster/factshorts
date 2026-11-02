@@ -27,6 +27,28 @@ log = logging.getLogger(__name__)
 
 PIPER_VOICES_REPO = "rhasspy/piper-voices"
 KOKORO_REPO = "hexgrad/Kokoro-82M"
+# Kokoro v1.0 English voices: a = American, b = British; f = female, m = male.
+KOKORO_VOICES = [
+    *(
+        f"af_{n}"
+        for n in (
+            "heart",
+            "alloy",
+            "aoede",
+            "bella",
+            "jessica",
+            "kore",
+            "nicole",
+            "nova",
+            "river",
+            "sarah",
+            "sky",
+        )
+    ),
+    *(f"am_{n}" for n in ("adam", "echo", "eric", "fenrir", "liam", "michael", "onyx", "puck")),
+    *(f"bf_{n}" for n in ("alice", "emma", "isabella", "lily")),
+    *(f"bm_{n}" for n in ("daniel", "fable", "george", "lewis")),
+]
 
 
 @dataclass

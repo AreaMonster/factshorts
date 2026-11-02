@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -39,6 +40,9 @@ def job_log(log_file: Path) -> Iterator[logging.Handler]:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(log_file, encoding="utf-8")
     handler.setFormatter(logging.Formatter(FORMAT))
+    # Only this thread's records: the Web UI may run several jobs at once.
+    thread = threading.get_ident()
+    handler.addFilter(lambda record: record.thread == thread)
     root = logging.getLogger("factshorts")
     root.addHandler(handler)
     try:
