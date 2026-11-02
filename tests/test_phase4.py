@@ -127,16 +127,17 @@ def test_rerender_redoes_only_voice_onward(
     pipeline = Pipeline(cfg, db, Services(llm=llm, wiki=FakeWiki(source), synth_factory=FakeSynth))
     job_id = pipeline.create_job(Idea(text="How high is Mount Testa?", length=30))
     assert pipeline.run(job_id) is not None
-    calls = len(llm.calls)
+    calls = llm.work_calls
 
     pipeline.rerender(job_id, theme="neon", music=False)
     log: list[tuple[str, str]] = []
     result = pipeline.run(job_id, progress=lambda s, m: log.append((s, m)))
     assert result is not None
     assert {s for s, m in log if m == "started"} == {"voice", "visuals", "render", "export"}
-    assert len(llm.calls) == calls  # no new script, no new fact-checks
+    assert llm.work_calls == calls  # no new script, no new fact-checks
     render = json.loads((pipeline.workdir(job_id).root / "render" / "render.json").read_text())
-    assert render["music"] is None
+    assert render["music_default"] is False  # the music track exists, the main video has none
+    assert render["video"] == render["video_voice"] and render["video_music"]
     with pytest.raises(FileNotFoundError):
         pipeline.rerender(job_id, theme="does-not-exist")
 
@@ -158,13 +159,13 @@ def test_rerender_keeps_script_of_jobs_with_old_fingerprints(
     wd = pipeline.workdir(job_id)
     for step in ("sourcing", "premise", "script", "verification"):  # as stored before Phase 4
         db.set_step_hash(job_id, step, pipeline._legacy_hash(wd, step))
-    calls = len(llm.calls)
+    calls = llm.work_calls
 
     pipeline.rerender(job_id, theme="watercolor")
     log: list[tuple[str, str]] = []
     assert pipeline.run(job_id, progress=lambda s, m: log.append((s, m))) is not None
     assert {s for s, m in log if m == "started"} == {"voice", "visuals", "render", "export"}
-    assert len(llm.calls) == calls
+    assert llm.work_calls == calls
 
 
 @needs_ffmpeg
@@ -211,3 +212,38 @@ def test_align_by_text_gives_up_on_unrelated_audio() -> None:
     assert (
         align_by_text("Mount Everest rises high.", [("hello", 0, 1), ("world", 1, 2)], 0, 2) is None
     )
+
+
+@needs_ffmpeg
+def test_music_is_a_separate_track_with_two_finished_versions(
+    cfg: Config, db: Database, source: SourceDoc, script: Script
+) -> None:
+    cfg.render.width, cfg.render.height = 270, 480
+    llm = FakeLLM(
+        {
+            "ArticleGuess": [ArticleGuess(article_title=source.title, search_query=source.title)],
+            "LLMScript": [script_to_llm(script)],
+        }
+    )
+    pipeline = Pipeline(cfg, db, Services(llm=llm, wiki=FakeWiki(source), synth_factory=FakeSynth))
+    job_id = pipeline.create_job(Idea(text="How high is Mount Testa?", length=30, music=False))
+    result = pipeline.run(job_id)
+    assert result is not None and result.video_no_music and not result.music_default
+    assert (pipeline.workdir(job_id).root / "render" / "music.wav").is_file()
+    with_music, plain = Path(result.video), Path(result.video_no_music)
+    assert plain.name.endswith("_no-music.mp4") and with_music.is_file()
+    # Same picture and length, but only one of them carries the music.
+    assert ffmpeg_durations(with_music) == ffmpeg_durations(plain)
+    assert audio_mod.loudness(with_music) == pytest.approx(-14.0, abs=1.5)
+    assert audio_mod.loudness(plain) == pytest.approx(-14.0, abs=1.5)
+    caption = Path(result.caption_txt).read_text("utf-8")
+    assert caption.startswith(script.hook.narration)  # no caption answer queued: the hook
+    meta = json.loads(Path(result.metadata_json).read_text("utf-8"))
+    assert meta["music_default"] is False
+
+
+def ffmpeg_durations(path: Path) -> tuple[float, float]:
+    from factshorts.render import ffmpeg
+
+    d = ffmpeg.stream_durations(path)
+    return round(d["video"], 2), round(d["audio"], 1)

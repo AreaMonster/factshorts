@@ -171,6 +171,11 @@ class FakeLLM:
         self.responses = {k: list(v) for k, v in responses.items()}
         self.calls: list[tuple[str, list[dict[str, str]]]] = []
 
+    @property
+    def work_calls(self) -> int:
+        """Calls that write or check the script (the export's TikTok caption not counted)."""
+        return sum(1 for name, _ in self.calls if name != "CaptionLine")
+
     def structured(self, messages, schema, model=None, retries=3, temperature=None):
         self.calls.append((schema.__name__, messages))
         if schema.__name__ not in self.responses and schema.__name__ in JUDGE_DEFAULTS:

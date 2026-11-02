@@ -8,11 +8,13 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from PIL import Image
 
 from factshorts import __version__
 from factshorts.core.captions import caption_chunks
+from factshorts.core.social import tiktok_caption
 from factshorts.models import (
     AudioPlan,
     ExportResult,
@@ -195,6 +197,8 @@ def export(
     visuals: VisualsPlan | None = None,
     thumbnail_base: Path | None = None,
     theme: str | None = None,
+    llm: Any = None,
+    caption_model: str | None = None,
 ) -> ExportResult:
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     full_label = verification.label if verification and verified else "UNVERIFIED"
@@ -203,8 +207,13 @@ def export(
     slug = slugify(script.title)
     folder = output_dir / "pending" / f"{stamp}_{slug}{label}_{job_id[-6:]}"
     folder.mkdir(parents=True, exist_ok=True)
+    # Main file: with music when there is a music track; plus a copy without it.
     video = folder / f"{slug}{label}.mp4"
-    shutil.copy2(render.video, video)
+    shutil.copy2(render.video_music or render.video, video)
+    no_music = None
+    if render.video_music and render.video_voice:
+        no_music = folder / f"{slug}{label}_no-music.mp4"
+        shutil.copy2(render.video_voice, no_music)
 
     tags = hashtags(script, source, idea.topic)
     sources = build_sources_json(idea, source, script, verification, verified)
@@ -216,6 +225,8 @@ def export(
         "sync": sync,
         "music": render.music,
         "loudness_lufs": render.lufs,
+        "file_without_music": no_music.name if no_music else None,
+        "music_default": render.music_default,
     }
     if visuals is not None and visuals.mode != "off":
         sources["visuals"] = {
@@ -259,6 +270,7 @@ def export(
         "image_credits": [],
         "ai_generated_visuals": bool(visuals and visuals.mode != "off" and visuals.scenes),
         "status": "pending",
+        "music_default": render.music_default,
     }
     meta_path = folder / "metadata.json"
     meta_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -278,9 +290,24 @@ def export(
         log.warning("thumbnail failed: %s", exc)
         thumb = None
 
+    caption = tiktok_caption(
+        script,
+        source,
+        idea.topic,
+        full_label,
+        bool(metadata["ai_generated_visuals"]),
+        llm,
+        caption_model,
+    )
+    caption_path = folder / "tiktok.txt"
+    caption_path.write_text(caption, encoding="utf-8")
+
     return ExportResult(
         folder=str(folder),
         video=str(video),
+        video_no_music=str(no_music) if no_music else None,
+        music_default=render.music_default,
+        caption_txt=str(caption_path),
         sources_json=str(sources_path),
         metadata_json=str(meta_path),
         description_txt=str(desc_path),

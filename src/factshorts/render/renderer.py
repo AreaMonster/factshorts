@@ -407,9 +407,11 @@ def render_video(
     backgrounds: dict[str, str] | None = None,
     audio_cfg: AudioConfig | None = None,
     music_seed: int | None = None,
+    music_default: bool = True,
 ) -> RenderResult:
-    """Render all scenes, then mix narration with (optional) music and master the loudness.
-    `music_seed` None = no music."""
+    """Render all scenes, then master the audio twice: voice only, and voice with the music
+    track (made first, on its own). `music_seed` None = no music track at all;
+    `music_default` says which version is the main one."""
     render_dir.mkdir(parents=True, exist_ok=True)
     codec = ffmpeg.pick_encoder(cfg.encoder)
     specs = build_specs(script, audio, cfg, codec, render_dir, source_label, theme, backgrounds)
@@ -429,27 +431,31 @@ def render_video(
             outs = list(pool.map(render_segment, payloads))
     video_only = render_dir / "video_only.mp4"
     ffmpeg.concat([Path(o) for o in outs], video_only)
-    final = render_dir / "final.mp4"
     duration = specs[0].total_frames / cfg.fps
+    audio_cfg = audio_cfg or AudioConfig()
     music_path, music_note = None, None
     if music_seed is not None:
         music_path = render_dir / "music.wav"
         music_note = make_music(music_path, duration, music_seed)
-    mastered = render_dir / "master.wav"
-    master(
-        audio_dir / audio.wav,
-        mastered,
-        duration,
-        cfg.lufs_target,
-        audio_cfg or AudioConfig(),
-        music_path,
-    )
-    ffmpeg.mux(video_only, mastered, final, duration, cfg.audio_bitrate)
+    versions: dict[str, Path] = {}
+    for name, track in (("voice", None), ("music", music_path)):
+        if name == "music" and track is None:
+            continue
+        mastered = render_dir / f"master_{name}.wav"
+        master(audio_dir / audio.wav, mastered, duration, cfg.lufs_target, audio_cfg, track)
+        out = render_dir / ("final.mp4" if name == "music" else "final_voice.mp4")
+        ffmpeg.mux(video_only, mastered, out, duration, cfg.audio_bitrate)
+        versions[name] = out
+    with_music = music_default and "music" in versions
+    main = versions["music" if with_music else "voice"]
     return RenderResult(
-        video=str(final),
+        video=str(main),
         duration=duration,
         frames=specs[0].total_frames,
         encoder=codec,
         music=music_note,
-        lufs=loudness(final),
+        lufs=loudness(main),
+        video_music=str(versions["music"]) if "music" in versions else None,
+        video_voice=str(versions["voice"]),
+        music_default=with_music,
     )

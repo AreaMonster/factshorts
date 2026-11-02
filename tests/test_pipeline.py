@@ -90,12 +90,12 @@ def test_resume_skips_finished_steps(
     pipeline, llm, synth = make_pipeline(cfg, db, source, script)
     job_id = pipeline.create_job(Idea(text="How high is Mount Testa?", length=30))
     assert pipeline.run(job_id) is not None
-    llm_calls, tts_calls = len(llm.calls), len(synth.calls)
+    llm_calls, tts_calls = llm.work_calls, len(synth.calls)
 
     log: list[tuple[str, str]] = []
     assert pipeline.run(job_id, progress=lambda s, m: log.append((s, m))) is not None
     assert all(m == "already done, skipping" for _, m in log)
-    assert len(llm.calls) == llm_calls and len(synth.calls) == tts_calls
+    assert llm.work_calls == llm_calls and len(synth.calls) == tts_calls
 
     # Removing the render output re-runs only render and export.
     (pipeline.workdir(job_id).root / "render" / "render.json").unlink()
@@ -103,7 +103,7 @@ def test_resume_skips_finished_steps(
     pipeline.run(job_id, progress=lambda s, m: log.append((s, m)))
     rerun = {s for s, m in log if m == "started"}
     assert rerun == {"render", "export"}
-    assert len(llm.calls) == llm_calls
+    assert llm.work_calls == llm_calls
 
 
 def test_failed_verification_rejects_with_reason(

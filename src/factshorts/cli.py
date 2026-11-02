@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import warnings
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -29,6 +30,8 @@ def _bootstrap(config: Path | None) -> tuple[Config, Database]:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+    # Library deprecation notices (e.g. torch.jit inside Kokoro) are not for the user.
+    warnings.filterwarnings("ignore", category=FutureWarning, module=r"torch\..*")
     base = load_config(config)
     base.ensure_dirs()
     db = Database(base.db_path)
@@ -170,14 +173,27 @@ def make(
 
 
 @app.command()
-def resume(job_id: str, config: ConfigOpt = None) -> None:
-    """Resume a job from its last completed step."""
+def resume(
+    job_id: str,
+    from_step: Annotated[
+        str | None,
+        typer.Option("--from", help="Redo from this step, e.g. verification or voice"),
+    ] = None,
+    config: ConfigOpt = None,
+) -> None:
+    """Resume a job from its last completed step (or redo it from --from STEP)."""
     from factshorts.core.pipeline import Pipeline
 
     cfg, db = _bootstrap(config)
     if db.get_job(job_id) is None:
         _fail(f"No job {job_id}")
-    raise typer.Exit(_run(Pipeline(cfg, db), job_id))
+    pipeline = Pipeline(cfg, db)
+    if from_step:
+        try:
+            pipeline.redo_from(job_id, from_step)
+        except ValueError as exc:
+            _fail(str(exc))
+    raise typer.Exit(_run(pipeline, job_id))
 
 
 @app.command()
@@ -373,6 +389,40 @@ def queue_clear(config: ConfigOpt = None) -> None:
 
     _, db = _bootstrap(config)
     typer.echo(f"Cleared {IdeaStore(db).clear()} queued idea(s).")
+
+
+@app.command()
+def review(config: ConfigOpt = None) -> None:
+    """Review pending videos in the terminal: approve, reject or skip each one."""
+    from factshorts.core.review import review_item, set_video_status
+
+    cfg, db = _bootstrap(config)
+    rows = db.query("SELECT job_id FROM videos WHERE status = 'pending' ORDER BY created_at")
+    if not rows:
+        typer.echo("Nothing to review.")
+        return
+    typer.echo(
+        "Automatic checks reduce mistakes but cannot rule them out: watch each video and read "
+        "its claims before approving."
+    )
+    for n, row in enumerate(rows, start=1):
+        try:
+            item = review_item(cfg, db, row["job_id"])
+        except (ValueError, OSError) as exc:
+            typer.echo(f"\n[{n}/{len(rows)}] {row['job_id']}: cannot show it ({exc})")
+            continue
+        typer.echo(f"\n[{n}/{len(rows)}] {item.title}  [{item.label}]")
+        typer.echo(f"  video:   {item.video or '(missing)'}")
+        typer.echo(f"  sources: {', '.join(item.sources)}")
+        for line in item.lines:
+            typer.echo(f"  {line}")
+        choice = typer.prompt("  [a]pprove, [r]eject, [s]kip, [q]uit", default="s").strip().lower()
+        if choice.startswith("q"):
+            break
+        if choice[:1] in ("a", "r"):
+            status = "approved" if choice.startswith("a") else "rejected"
+            folder = set_video_status(cfg, db, item.job_id, status)
+            typer.echo(f"  {status}: {folder}")
 
 
 @app.command()

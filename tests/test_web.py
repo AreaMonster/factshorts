@@ -93,7 +93,11 @@ def test_create_review_and_approve(client: TestClient, cfg: Config) -> None:
     page = client.get(f"/review/{job_id}")
     assert page.status_code == 200
     assert "Its summit rises 6,412 meters above sea level." in page.text
-    assert "quote: pass" in page.text and "entities: pass" in page.text
+    assert '<span class="check pass"' in page.text and ">quote</span>" in page.text
+    # Both versions exist; the player switches between them and Download follows.
+    assert 'data-plain="/media/' in page.text and 'id="download"' in page.text
+    assert "_no-music.mp4" in page.text
+    assert "TikTok caption" in page.text and "#facts" in page.text
     assert "oldid=" in page.text or "Mount Testa" in page.text  # article (revision) link
     video = client.get(f"/api/jobs/{job_id}").json()["video"]
     mp4 = next(p.name for p in Path(video["folder"]).glob("*.mp4"))

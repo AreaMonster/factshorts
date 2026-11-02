@@ -398,6 +398,17 @@ class Pipeline:
         notify("edit", f"{seg_id} passed the checks: {new.narration}")
         return []
 
+    def redo_from(self, job_id: str, step: str) -> None:
+        """Make `run` start again at `step` (e.g. after an improvement to the checks).
+        Earlier steps are kept; the script itself is kept too when redoing verification."""
+        if step not in STEPS:
+            raise ValueError(f"unknown step '{step}' (one of: {', '.join(STEPS)})")
+        if self.db.get_job(job_id) is None:
+            raise ValueError(f"no job {job_id}")
+        for later in STEPS[STEPS.index(step) :]:
+            self.db.set_step(job_id, later, "stale")
+        self.db.update_job(job_id, state="queued", error=None)
+
     def _is_done(self, job_id: str, step: str, wd: WorkDir) -> bool:
         row = self.db.step_status(job_id, step)
         return (
@@ -840,7 +851,8 @@ class Pipeline:
                 if sc.clip
             },
             audio_cfg=self.cfg.audio,
-            music_seed=seed_for(job_id, "music") if music else None,
+            music_seed=seed_for(job_id, "music"),  # always made, so it can be toggled later
+            music_default=music,
             theme=idea.theme,
         )
         sync = check_sync(Path(result.video))
@@ -871,6 +883,8 @@ class Pipeline:
             visuals=visuals,
             thumbnail_base=thumb_base,
             theme=idea.theme or self.cfg.render.theme,
+            llm=self.services.llm,
+            caption_model=self.cfg.ollama.writer_model,
         )
         old = self.db.get_video(job_id)
         if old is not None and Path(old["folder"]) != Path(result.folder):

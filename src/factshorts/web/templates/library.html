@@ -35,7 +35,9 @@
     <div class="row small muted">{{ label_badge(v.verified) }} {{ v.topic or "" }} · {{ v.created_at | when }}</div>
     <div class="row small" style="margin-top:.5rem">
       {% if it.mp4 %}<a href="/media/{{ v.job_id }}/{{ it.mp4 }}?download=1">MP4</a>{% endif %}
-      {% if it.txt %}<a href="/media/{{ v.job_id }}/{{ it.txt }}?download=1">description</a>{% endif %}
+      {% if it.mp4_plain %}<a href="/media/{{ v.job_id }}/{{ it.mp4_plain }}?download=1">MP4 without music</a>{% endif %}
+      {% if it.description %}<a href="/media/{{ v.job_id }}/{{ it.description }}?download=1">description</a>{% endif %}
+      {% if it.tiktok %}<a href="/media/{{ v.job_id }}/{{ it.tiktok }}">caption</a>{% endif %}
       <form class="inline" method="post" action="/library/{{ v.job_id }}/delete" onsubmit="return confirm('Delete this video and its files?')">
         <button class="small danger" type="submit">Delete</button>
       </form>

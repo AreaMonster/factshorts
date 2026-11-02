@@ -281,6 +281,11 @@ class RenderResult(BaseModel):
     encoder: str
     music: str | None = None  # where the background music came from (credits)
     lufs: float | None = None  # integrated loudness of the final mix
+    # Two finished versions of the same picture: with the music track and voice only.
+    # `video` is the one the idea asked for (music_default).
+    video_music: str | None = None
+    video_voice: str | None = None
+    music_default: bool = True
 
 
 class ExportResult(BaseModel):
@@ -292,3 +297,6 @@ class ExportResult(BaseModel):
     srt: str | None = None
     thumbnail: str | None = None
     verified: bool
+    video_no_music: str | None = None  # the same video without background music
+    music_default: bool = True  # which version the idea asked for
+    caption_txt: str | None = None  # short caption to paste into TikTok

@@ -36,6 +36,7 @@ from factshorts.web.app import (
     save_upload,
     sse_response,
     sse_stream,
+    video_files,
 )
 
 Text = Annotated[str, Form()]
@@ -446,15 +447,7 @@ def register(app: FastAPI, state: App) -> None:
         items = []
         for v in videos:
             folder = Path(v["folder"])
-            names = {p.suffix: p.name for p in folder.iterdir()} if folder.is_dir() else {}
-            items.append(
-                {
-                    "v": v,
-                    "mp4": names.get(".mp4"),
-                    "txt": names.get(".txt"),
-                    "jpg": names.get(".jpg"),
-                }
-            )
+            items.append({"v": v, **video_files(folder)})
         return state.render(
             request,
             "library.html",

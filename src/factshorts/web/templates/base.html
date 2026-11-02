@@ -8,18 +8,19 @@
   <script src="/static/htmx.min.js"></script>
   <script src="/static/sse.js"></script>
 </head>
-<body hx-boost="false">
-  <header class="top">
-    <a class="brand" href="/create">fact<span>shorts</span></a>
+<body>
+  <aside class="rail">
+    <a class="brand" href="/create">FACT<b>SHORTS</b></a>
     <nav>
       {% for key, label in [("create", "Create"), ("jobs", "Jobs"), ("review", "Review"), ("library", "Library"), ("settings", "Settings")] %}
-      <a href="/{{ key }}" class="{{ 'active' if nav == key else '' }}">{{ label }}</a>
+      <a href="/{{ key }}" class="{{ 'active' if nav == key }}"><span>0{{ loop.index }}</span>{{ label }}</a>
       {% endfor %}
     </nav>
-    {% if login %}
-    <form method="post" action="/logout"><button class="small" type="submit">Log out</button></form>
-    {% endif %}
-  </header>
+    <div class="foot">
+      {% if login %}<form method="post" action="/logout"><button class="small" type="submit">Log out</button></form>{% endif %}
+      <p>Runs on this computer. Only source lookups (Wikipedia, Wikidata, your links) and first-time model downloads use the internet.</p>
+    </div>
+  </aside>
   <main>
     {% block content %}{% endblock %}
   </main>

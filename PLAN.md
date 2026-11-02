@@ -302,3 +302,21 @@ Then Phase 2 (full verification) as planned.
   are refused by an Origin check. Media files are served only from the video's own folder.
 - **Wikimedia Commons images** are not part of the UI: you chose AI illustrations, so the
   Commons option from the spec is not implemented.
+
+## 12. Phase 6 additions (requested during Phase 6)
+
+- **TikTok caption** (`tiktok.txt`): the writer model makes one catchy line from the checked
+  script; a guard rejects it if it contains a number (digits or words) or a name that is not
+  in the script, and the checked hook is used instead. Then source credit (Wikipedia, CC BY-SA),
+  an AI-visuals note and up to six hashtags.
+- **Music as a separate track:** the music bed is always made first, then the audio is
+  mastered twice (voice only, and voice + ducked music) and muxed onto the same picture.
+  Export writes `<title>.mp4` (with music) and `<title>_no-music.mp4`; the idea's music
+  setting only decides which one the player starts with. The Review player switches between
+  them at the same position, and Download follows the choice.
+- **UI redesign:** an editorial look instead of a generic dashboard: warm charcoal, one signal
+  color, Bebas Neue (the same OFL font as the videos), a left rail, ruled sections instead of
+  cards, square status markers in a monospace font.
+- **GPU:** the UI worker releases the voice model, Whisper and cached GPU memory after every
+  task. Before, a UI process that had run edits kept GPU memory while idle; a command-line
+  job's image generation was slow (about 18 s per step instead of 1 s) until it was stopped.

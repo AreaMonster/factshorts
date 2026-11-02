@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import secrets
-import shutil
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from factshorts.config import Config, apply_overrides, load_config
+from factshorts.config import ASSETS_DIR, Config, apply_overrides, load_config
 from factshorts.core.pipeline import STEPS, Pipeline, Services, default_services
 from factshorts.core.premise import PremiseResult
 from factshorts.db import Database
@@ -38,7 +38,7 @@ CHECK_NAMES = ["quote", "entities", "wikidata", "nli", "llm_judge"]
 LENGTHS = [30, 45, 60, 75, 90, 120]
 TONES = ["neutral", "funny", "dramatic", "kid-friendly"]
 SOURCE_SUFFIXES = {".txt", ".md", ".pdf"}
-OPEN_PATHS = ("/login", "/static/")
+OPEN_PATHS = ("/login", "/static/", "/fonts/")
 
 
 class App:
@@ -124,6 +124,8 @@ def create_app(
     )
     app.state.fs = state
     app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
+    # The UI uses the same bundled (OFL) display font as the videos.
+    app.mount("/fonts", StaticFiles(directory=ASSETS_DIR / "fonts"), name="fonts")
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
@@ -228,14 +230,19 @@ def review_view(cfg: Config, db: Database, job_id: str) -> dict[str, Any]:
             ]
         segments.append({"seg": seg, "claims": claims, "sentences": sentences})
     video = db.get_video(job_id)
-    files: dict[str, str] = {}
-    if video is not None and Path(video["folder"]).is_dir():
-        for f in Path(video["folder"]).iterdir():
-            files[f.suffix.lstrip(".") if f.suffix != ".json" else f.stem] = f.name
-    description = ""
-    if "txt" in files:
-        description = (Path(video["folder"]) / files["txt"]).read_text("utf-8")
+    files = video_files(Path(video["folder"])) if video is not None else {}
+    folder = Path(video["folder"]) if video is not None else None
+
+    def text(key: str) -> str:
+        return (folder / files[key]).read_text("utf-8") if folder and key in files else ""
+
+    music_default = True
+    if "metadata" in files:
+        music_default = json.loads(text("metadata")).get("music_default", True)
     return {
+        "description": text("description"),
+        "caption": text("tiktok"),
+        "music_default": music_default,
         "script": script,
         "source": source,
         "verification": verification,
@@ -244,9 +251,24 @@ def review_view(cfg: Config, db: Database, job_id: str) -> dict[str, Any]:
         "segments": segments,
         "video": video,
         "files": files,
-        "description": description,
         "check_names": CHECK_NAMES,
     }
+
+
+def video_files(folder: Path) -> dict[str, str]:
+    """The deliverables in a video folder by role: mp4 (with music, or the only version),
+    mp4_plain (without music), description, tiktok, sources, metadata, srt, jpg."""
+    files: dict[str, str] = {}
+    if not folder.is_dir():
+        return files
+    for f in sorted(folder.iterdir()):
+        if f.suffix == ".mp4":
+            files["mp4_plain" if f.stem.endswith("_no-music") else "mp4"] = f.name
+        elif f.name in ("description.txt", "tiktok.txt", "sources.json", "metadata.json"):
+            files[f.stem] = f.name
+        elif f.suffix in (".srt", ".jpg"):
+            files[f.suffix.lstrip(".")] = f.name
+    return files
 
 
 async def sse_stream(
@@ -322,12 +344,9 @@ def idea_settings(
 
 
 def move_video(cfg: Config, db: Database, job_id: str, status: str) -> None:
-    video = db.get_video(job_id)
-    if video is None:
-        raise HTTPException(404, "no video for this job")
-    folder = Path(video["folder"])
-    target = cfg.output_dir / status / folder.name
-    if folder.is_dir() and folder != target:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(folder), str(target))
-    db.update_video(job_id, status=status, folder=str(target))
+    from factshorts.core.review import set_video_status
+
+    try:
+        set_video_status(cfg, db, job_id, status)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc

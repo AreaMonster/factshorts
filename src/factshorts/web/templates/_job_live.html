@@ -8,6 +8,9 @@
         <form class="inline" method="post" action="/jobs/{{ job.id }}/cancel"><button class="small danger" type="submit">Cancel</button></form>
       {% elif job.raw_state in ("failed", "cancelled", "rejected", "queued") %}
         <form class="inline" method="post" action="/jobs/{{ job.id }}/retry"><button class="small" type="submit">Retry from the failed step</button></form>
+      {% elif job.raw_state == "running" %}
+        {# Marked running but no task: the program stopped mid-job (or it runs from the command line). #}
+        <form class="inline" method="post" action="/jobs/{{ job.id }}/retry" onsubmit="return confirm('Resume this job from its last finished step? Do not do this while it still runs in a terminal.')"><button class="small" type="submit">Resume</button></form>
       {% endif %}
     </div>
   </div>

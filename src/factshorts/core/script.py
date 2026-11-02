@@ -213,6 +213,11 @@ def format_source(source: SourceDoc, max_words: int) -> str:
     return "\n".join(lines).strip()
 
 
+def _unlabel(quote: str) -> str:
+    """Writers sometimes copy the [n] sentence numbers of the SOURCE listing into quotes."""
+    return re.sub(r"\s*\[\d+\]\s*", " ", quote).strip()
+
+
 def _is_tag_on(sentence: str) -> bool:
     """Short connective like "Here's why." that carries no fact of its own."""
     return len(sentence.split()) <= 4 and not re.search(r"\d|[A-Z][a-z]+.*[A-Z]", sentence)
@@ -226,7 +231,7 @@ def to_segment(s: LLMSegment, visual: SceneType | None = None) -> Segment:
     for x in s.sentences:
         parts = [_end_sentence(t) for t in split_sentences(x.text)] if x.text.strip() else []
         narration += parts
-        quotes = [q.strip() for q in x.source_quotes if q.strip()]
+        quotes = [q for q in map(_unlabel, x.source_quotes) if q]
         factual = [t for t in parts if not (len(parts) > 1 and _is_tag_on(t))] or parts
         claims += [
             ClaimModel(text=t, source_quote=q, type=x.claim_type) for t in factual for q in quotes
@@ -395,9 +400,9 @@ class ScriptWriter:
             if x is None:
                 continue
             claims += [
-                ClaimModel(text=text, source_quote=q.strip(), type=x.claim_type)
-                for q in x.source_quotes
-                if q.strip()
+                ClaimModel(text=text, source_quote=q, type=x.claim_type)
+                for q in map(_unlabel, x.source_quotes)
+                if q
             ]
         return Segment(narration=" ".join(sentences), on_screen_text="", claims=claims)
 
@@ -556,9 +561,20 @@ def _numbers(text: str) -> list[str]:
     return re.findall(r"\d+(?:[.,]\d+)*", text)
 
 
+# Words that carry no content of their own ("They also steal kills" restates "who also steal
+# kills"). Negations are deliberately not here: "never" changes what a sentence says.
+FUNCTION_WORDS = frozenset(
+    {
+        "they", "them", "their", "it", "its", "he", "she", "his", "her", "we", "you", "this",
+        "that", "these", "those", "there", "here", "who", "which", "what", "also", "even",
+        "just", "still", "very", "so", "then", "too", "from", "with", "by", "as", "such",
+    }
+)  # fmt: skip
+
+
 def _contained(sentence: str, earlier: str, ignore: set[str]) -> bool:
     """Every content word of `sentence` (at least 4, subject names aside) is in `earlier`."""
-    words = _stems(sentence) - ignore
+    words = _stems(sentence) - ignore - FUNCTION_WORDS
     return len(words) >= 4 and words <= _stems(earlier)
 
 

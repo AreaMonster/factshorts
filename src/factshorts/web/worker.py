@@ -95,7 +95,18 @@ class Worker:
             log.exception("task %d failed", task_id)
             state, message = "failed", f"{type(exc).__name__}: {exc}"
         self.db.update_task(task_id, state=state, message=message)
+        self._release_gpu(pipeline)
         return True
+
+    @staticmethod
+    def _release_gpu(pipeline: Pipeline) -> None:
+        """Between tasks the UI process holds no GPU memory (voice, Whisper, cached blocks),
+        so a job started from the command line meanwhile gets the whole card."""
+        pipeline.services.release_synth()
+        pipeline._whisper = None
+        from factshorts.render.aigen import free_gpu
+
+        free_gpu()
 
     def _progress(self, pipeline: Pipeline, task_id: int, job_id: str):
         path = progress_path(pipeline, job_id)
