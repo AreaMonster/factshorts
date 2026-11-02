@@ -31,7 +31,9 @@ def _bootstrap(config: Path | None) -> tuple[Config, Database]:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     # Library deprecation notices (e.g. torch.jit inside Kokoro) are not for the user.
-    warnings.filterwarnings("ignore", category=FutureWarning, module=r"torch\..*")
+    warnings.filterwarnings(
+        "ignore", category=FutureWarning, module=r"(torch|diffusers|transformers)(\..*)?"
+    )
     base = load_config(config)
     base.ensure_dirs()
     db = Database(base.db_path)

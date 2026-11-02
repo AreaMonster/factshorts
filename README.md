@@ -72,8 +72,17 @@ the image model about 31 GB, voice, depth and fact-checking models about 1.5 GB)
    ollama pull gemma4:26b
    ```
 
-4. **factshorts itself.** In the project folder, create an environment and install. Keeping
-   the environment outside OneDrive or Dropbox folders avoids sync trouble with large files:
+4. **factshorts itself.** Get the code (needs `winget install Git.Git`), then create an
+   environment in the project folder and install. Keeping the environment outside OneDrive or
+   Dropbox folders avoids sync trouble with large files:
+
+   ```bash
+   git clone https://github.com/AreaMonster/factshorts.git
+   ```
+
+   ```bash
+   cd factshorts
+   ```
 
    ```bash
    uv venv C:\factshorts-data\.venv --python 3.11
