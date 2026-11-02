@@ -1,0 +1,28 @@
+# Theme: warm layered paper-craft look.
+name = "papercut"
+
+[colors]
+background_top = "#3b2a1e"
+background_bottom = "#6b4630"
+background_accent = "#e8a66a"
+text = "#fffaf0"
+accent = "#ffb347"
+caption = "#fffaf0"
+caption_stroke = "#2a1a10"
+muted = "#f0dcc4"
+particle = "#fff2dc"
+
+[fonts]
+display = "BebasNeue-Regular.ttf"
+display_weight = 0
+body = "Montserrat-Variable.ttf"
+body_weight = 800
+small_weight = 600
+
+[animation]
+speed = 0.95
+particles = 20
+
+[art]
+style_name = "a layered paper cut-out illustration"
+style = "layered paper cut-out craft illustration, stacked colored paper with soft drop shadows, warm handmade look, no text, no letters, no watermark"

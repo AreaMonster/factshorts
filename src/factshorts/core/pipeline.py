@@ -24,7 +24,8 @@ from factshorts.core.script import (
 )
 from factshorts.core.sourcing import SourcingError, resolve_source
 from factshorts.core.tts import Synthesizer, build_audio, make_synth
-from factshorts.core.visuals import VisualBuilder
+from factshorts.core.visuals import VisualBuilder, seed_for
+from factshorts.core.whisper_align import WhisperAligner
 from factshorts.core.workdir import WorkDir
 from factshorts.db import Database
 from factshorts.logging_setup import job_log
@@ -51,6 +52,7 @@ from factshorts.verify.normalize import normalize_chars
 
 log = logging.getLogger(__name__)
 
+PRESENTATION_FIELDS = ("theme", "voice", "music")
 STEPS = ["sourcing", "premise", "script", "verification", "voice", "visuals", "render", "export"]
 STEP_OUTPUT = {
     "sourcing": "source.json",
@@ -83,7 +85,9 @@ class Services:
     nli_factory: Callable[[], NLIModel] | None = None
     http: CachedHttp | None = None
     wikidata: Wikidata | None = None
+    voice_factory: Callable[[str], Synthesizer] | None = None
     _synth: Synthesizer | None = field(default=None, init=False)
+    _voice: tuple[str, Synthesizer] | None = field(default=None, init=False)
     _nli: NLIModel | None = field(default=None, init=False)
 
     def nli(self) -> NLIModel | None:
@@ -92,13 +96,18 @@ class Services:
         return self._nli
 
     def release_synth(self) -> None:
-        if self._synth is not None:
-            self._synth = None
+        if self._synth is not None or self._voice is not None:
+            self._synth = self._voice = None
             from factshorts.render.aigen import free_gpu
 
             free_gpu()
 
-    def synth(self) -> Synthesizer:
+    def synth(self, voice: str | None = None) -> Synthesizer:
+        """The default voice, or another one when an idea asks for it."""
+        if voice is not None and self.voice_factory is not None:
+            if self._voice is None or self._voice[0] != voice:
+                self._voice = (voice, self.voice_factory(voice))
+            return self._voice[1]
         if self._synth is None:
             assert self.synth_factory is not None
             self._synth = self.synth_factory()
@@ -117,6 +126,7 @@ def default_services(cfg: Config, db: Database) -> Services:
         llm=llm,
         wiki=Wikipedia(http, cfg.wikipedia),
         synth_factory=lambda: make_synth(cfg.tts, cfg.models_dir),
+        voice_factory=lambda v: make_synth(cfg.tts.model_copy(update={"voice": v}), cfg.models_dir),
         visuals_factory=lambda theme: VisualBuilder(cfg, theme, reviewer=reviewer),
         nli_factory=lambda: TransformersNLI(
             cfg.verification.nli_model, cfg.verification.nli_device
@@ -133,6 +143,7 @@ class Pipeline:
         self.services = services or default_services(cfg, db)
         self._verifier_for: Path | None = None
         self._verifier_cache: Verifier | None = None
+        self._whisper: WhisperAligner | None = None
 
     def create_job(self, idea: Idea, idea_id: int | None = None) -> str:
         """Start a job. The idea is registered in the idea store (raises DuplicateIdea for a
@@ -239,13 +250,39 @@ class Pipeline:
 
     def _input_hash(self, wd: WorkDir, step: str) -> str:
         idx = STEPS.index(step)
-        files = ["idea.json"] + [STEP_OUTPUT[s] for s in STEPS[:idx]]
+        files = [STEP_OUTPUT[s] for s in STEPS[:idx]]
         h = hashlib.sha256()
+        idea = wd.read_model("idea.json", Idea)
+        if idx < STEPS.index("voice"):
+            # Theme, voice and music do not change sources, script or fact-checks, so a
+            # rerender with other presentation settings starts at the voice step.
+            idea = idea.model_copy(update=dict.fromkeys(PRESENTATION_FIELDS))
+        h.update(idea.model_dump_json().encode())
         for name in files:
             p = wd.root / name
             if p.is_file():
                 h.update(p.read_bytes())
         return h.hexdigest()
+
+    def rerender(
+        self,
+        job_id: str,
+        theme: str | None = None,
+        voice: str | None = None,
+        music: bool | None = None,
+    ) -> None:
+        """Change theme, voice or music of a job; `run` then redoes only voice onward."""
+        if self.db.get_job(job_id) is None:
+            raise ValueError(f"no job {job_id}")
+        if theme is not None:
+            load_theme(theme)  # fails early with the list of available themes
+        wd = self.workdir(job_id)
+        idea = wd.read_model("idea.json", Idea)
+        updates = {
+            k: v for k, v in (("theme", theme), ("voice", voice), ("music", music)) if v is not None
+        }
+        wd.write_model("idea.json", idea.model_copy(update=updates))
+        self.db.update_job(job_id, state="queued", error=None)
 
     def _is_done(self, job_id: str, step: str, wd: WorkDir) -> bool:
         row = self.db.step_status(job_id, step)
@@ -253,8 +290,17 @@ class Pipeline:
             row is not None
             and row["status"] == "done"
             and wd.exists(STEP_OUTPUT[step])
-            and row["input_hash"] == self._input_hash(wd, step)
+            and row["input_hash"] in (self._input_hash(wd, step), self._legacy_hash(wd, step))
         )
+
+    def _legacy_hash(self, wd: WorkDir, step: str) -> str:
+        """Fingerprint used before theme/voice rerenders existed (jobs made until Phase 4)."""
+        h = hashlib.sha256()
+        for name in ["idea.json"] + [STEP_OUTPUT[s] for s in STEPS[: STEPS.index(step)]]:
+            p = wd.root / name
+            if p.is_file():
+                h.update(p.read_bytes())
+        return h.hexdigest()
 
     # --- steps -----------------------------------------------------------------
 
@@ -302,6 +348,13 @@ class Pipeline:
                 f"{job_id} corrected   (or: cancel)"
             )
         notify("premise", f"{len(result.items)} assumption(s) checked, none contradicted")
+
+    def _aligner(self) -> WhisperAligner | None:
+        if not self.cfg.tts.use_whisper:
+            return None
+        if self._whisper is None:
+            self._whisper = WhisperAligner(self.cfg.tts.whisper_model)
+        return self._whisper
 
     def _writer(self, idea: Idea, wd: WorkDir) -> ScriptWriter:
         assert self.services.llm is not None
@@ -562,7 +615,12 @@ class Pipeline:
     def _step_voice(self, job_id: str, idea: Idea, wd: WorkDir, notify: ProgressFn) -> None:
         script = wd.read_model("script.json", Script)
         audio = build_audio(
-            script, self.services.synth(), self.cfg.tts, wd.subdir("audio"), self.cfg.cache_dir
+            script,
+            self.services.synth(idea.voice),
+            self.cfg.tts,
+            wd.subdir("audio"),
+            self.cfg.cache_dir,
+            self._aligner(),
         )
         need = self.cfg.script.min_duration_s if idea.length >= 60 and idea.factcheck else 0.0
         for _ in range(self.cfg.script.max_topups):
@@ -572,10 +630,11 @@ class Pipeline:
             script = self._extend(idea, wd, script, need - audio.duration + 3.0, notify)
             audio = build_audio(
                 script,
-                self.services.synth(),
+                self.services.synth(idea.voice),
                 self.cfg.tts,
                 wd.subdir("audio"),
                 self.cfg.cache_dir,
+                self._aligner(),
             )
         if audio.duration < need:
             notify(
@@ -626,7 +685,7 @@ class Pipeline:
         if self.cfg.visuals.mode == "off" or self.services.visuals_factory is None:
             plan = VisualsPlan(mode="off")
         else:
-            builder = self.services.visuals_factory(load_theme(self.cfg.render.theme))
+            builder = self.services.visuals_factory(load_theme(idea.theme or self.cfg.render.theme))
             llm = self.services.llm
             plan = builder.build(
                 job_id,
@@ -650,6 +709,7 @@ class Pipeline:
         audio = wd.read_model("audio/audio.json", AudioPlan)
         source = wd.read_model("source.json", SourceDoc)
         visuals = wd.read_model("visuals/visuals.json", VisualsPlan)
+        music = self.cfg.audio.music if idea.music is None else idea.music
         result = render_video(
             script,
             audio,
@@ -662,6 +722,9 @@ class Pipeline:
                 for sc in visuals.scenes
                 if sc.clip
             },
+            audio_cfg=self.cfg.audio,
+            music_seed=seed_for(job_id, "music") if music else None,
+            theme=idea.theme,
         )
         sync = check_sync(Path(result.video))
         notify(
@@ -674,6 +737,9 @@ class Pipeline:
 
     def _step_export(self, job_id: str, idea: Idea, wd: WorkDir, notify: ProgressFn) -> None:
         verification = wd.read_model("verification.json", Verification)
+        visuals = wd.read_model("visuals/visuals.json", VisualsPlan)
+        first = visuals.scenes[0].image if visuals.scenes else None
+        thumb_base = wd.root / "visuals" / first if first else None
         result = export(
             job_id=job_id,
             idea=idea,
@@ -685,7 +751,9 @@ class Pipeline:
             output_dir=self.cfg.output_dir,
             verified=verification.passed,
             sync=_read_json(wd.root / "render" / "sync.json"),
-            visuals=wd.read_model("visuals/visuals.json", VisualsPlan),
+            visuals=visuals,
+            thumbnail_base=thumb_base,
+            theme=idea.theme or self.cfg.render.theme,
         )
         self.db.add_video(
             job_id,

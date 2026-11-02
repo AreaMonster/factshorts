@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 from datetime import datetime
 from pathlib import Path
+
+from PIL import Image
 
 from factshorts import __version__
 from factshorts.core.captions import caption_chunks
@@ -21,6 +24,10 @@ from factshorts.models import (
     VisualsPlan,
     utcnow,
 )
+from factshorts.render.themes import load_theme
+from factshorts.render.thumbnail import frame_at, make_thumbnail
+
+log = logging.getLogger(__name__)
 
 DISCLAIMER = (
     "Facts were checked automatically against the cited source. Automated checks reduce "
@@ -186,6 +193,8 @@ def export(
     verified: bool,
     sync: dict[str, float] | None = None,
     visuals: VisualsPlan | None = None,
+    thumbnail_base: Path | None = None,
+    theme: str | None = None,
 ) -> ExportResult:
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     full_label = verification.label if verification and verified else "UNVERIFIED"
@@ -205,6 +214,8 @@ def export(
         "frames": render.frames,
         "encoder": render.encoder,
         "sync": sync,
+        "music": render.music,
+        "loudness_lufs": render.lufs,
     }
     if visuals is not None and visuals.mode != "off":
         sources["visuals"] = {
@@ -255,6 +266,18 @@ def export(
     srt_path = folder / f"{slug}{label}.srt"
     srt_path.write_text(build_srt(audio), encoding="utf-8")
 
+    thumb = folder / "thumbnail.jpg"
+    try:
+        base = (
+            Image.open(thumbnail_base).convert("RGB")
+            if thumbnail_base
+            else frame_at(video, min(1.0, render.duration / 2))
+        )
+        make_thumbnail(base, script.title, load_theme(theme or "default"), thumb)
+    except Exception as exc:  # a missing thumbnail must not lose the finished video
+        log.warning("thumbnail failed: %s", exc)
+        thumb = None
+
     return ExportResult(
         folder=str(folder),
         video=str(video),
@@ -262,5 +285,6 @@ def export(
         metadata_json=str(meta_path),
         description_txt=str(desc_path),
         srt=str(srt_path),
+        thumbnail=str(thumb) if thumb else None,
         verified=verified,
     )

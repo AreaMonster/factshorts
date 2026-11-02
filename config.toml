@@ -155,7 +155,10 @@ sentence_pause_ms = 250
 scene_pause_ms = 450
 lead_in_ms = 150
 tail_ms = 600
-use_whisper = false
+# Exact caption timing for voices without word timestamps (Piper), via local faster-whisper.
+# Kokoro reports timestamps itself, so this only matters for engine = "piper".
+use_whisper = true
+whisper_model = "small.en"
 
 # Spoken replacements for names the voice mispronounces.
 [tts.pronunciations]
@@ -175,6 +178,15 @@ max_hw_sessions = 4
 video_quality = 20           # CRF / CQ value, lower = better
 audio_bitrate = "192k"
 lufs_target = -14.0
+
+[audio]
+# Background music: files in assets/music (mp3/wav/ogg/flac, royalty-free!) are used when
+# present; otherwise an original ambient pad is generated. The final mix is normalized to
+# [render].lufs_target with two-pass loudnorm.
+music = true
+music_volume_db = -16.0
+duck_threshold = 0.02   # the music ducks when the voice is louder than this
+duck_ratio = 8.0
 
 [visuals]
 # parallax = AI illustration per scene + 3D depth camera move (default, ~10 min per video)

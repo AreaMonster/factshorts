@@ -1,0 +1,28 @@
+# Theme: dark synthwave colors, glowing neon illustrations.
+name = "neon"
+
+[colors]
+background_top = "#120428"
+background_bottom = "#2b0a3d"
+background_accent = "#00c2ff"
+text = "#ffffff"
+accent = "#ff3fd8"
+caption = "#ffffff"
+caption_stroke = "#12001f"
+muted = "#c8b8e8"
+particle = "#7af7ff"
+
+[fonts]
+display = "BebasNeue-Regular.ttf"
+display_weight = 0
+body = "Montserrat-Variable.ttf"
+body_weight = 800
+small_weight = 600
+
+[animation]
+speed = 1.15
+particles = 48
+
+[art]
+style_name = "a retro synthwave neon illustration"
+style = "retro synthwave neon vector illustration, glowing magenta and cyan outlines, dark purple night tones, clean shapes, no text, no letters, no watermark"

@@ -35,6 +35,9 @@ class Idea(BaseModel):
     source_file: str | None = None
     origin: Literal["custom", "auto"] = "custom"
     topic: str | None = None
+    music: bool | None = None  # None = [audio].music
+    theme: str | None = None  # None = [render].theme
+    voice: str | None = None  # None = [tts].voice
     article: str | None = None  # Wikipedia article already resolved (auto ideas)
     angle: str | None = None
     # Set when the idea's premise was false and the user chose a corrected video.
@@ -274,6 +277,8 @@ class RenderResult(BaseModel):
     duration: float
     frames: int
     encoder: str
+    music: str | None = None  # where the background music came from (credits)
+    lufs: float | None = None  # integrated loudness of the final mix
 
 
 class ExportResult(BaseModel):
@@ -283,4 +288,5 @@ class ExportResult(BaseModel):
     metadata_json: str
     description_txt: str
     srt: str | None = None
+    thumbnail: str | None = None
     verified: bool

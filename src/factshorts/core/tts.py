@@ -9,12 +9,16 @@ import os
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
 
 from factshorts.config import TTSConfig
-from factshorts.core.captions import align_word_timings, proportional_word_timings
+from factshorts.core.captions import (
+    align_by_text,
+    align_word_timings,
+    proportional_word_timings,
+)
 from factshorts.core.textnorm import to_speakable
 from factshorts.models import AudioPlan, Script, SegmentAudio, SentenceAudio
 from factshorts.verify.normalize import split_sentences
@@ -205,10 +209,32 @@ def synthesize_cached(
     return path, words
 
 
+def whisper_words(aligner: Any, wav: Path) -> list[SpokenWord] | None:
+    """Whisper word timings for a cached sentence wav (cached next to it)."""
+    path = wav.with_suffix(".whisper.json")
+    if path.is_file():
+        return [SpokenWord(**w) for w in json.loads(path.read_text(encoding="utf-8"))]
+    try:
+        words = [SpokenWord(t, a, b) for t, a, b in aligner.words(wav)]
+    except Exception as exc:  # timing falls back to an estimate; the audio is fine
+        log.warning("Whisper alignment failed for %s: %s", wav.name, exc)
+        return None
+    path.write_text(json.dumps([w.__dict__ for w in words]), encoding="utf-8")
+    return words
+
+
 def build_audio(
-    script: Script, synth: Synthesizer, cfg: TTSConfig, audio_dir: Path, cache_dir: Path
+    script: Script,
+    synth: Synthesizer,
+    cfg: TTSConfig,
+    audio_dir: Path,
+    cache_dir: Path,
+    aligner: Any = None,
 ) -> AudioPlan:
-    """Synthesize each sentence, join with pauses, write narration.wav and the timing plan."""
+    """Synthesize each sentence, join with pauses, write narration.wav and the timing plan.
+
+    Word timings come from the voice engine; if it has none, from `aligner` (Whisper) run on
+    the sentence audio; if that fails too, they are estimated from word lengths."""
     rate = synth.sample_rate
     pieces: list[np.ndarray] = [np.zeros(int(cfg.lead_in_ms * rate / 1000), dtype=np.int16)]
     cursor = len(pieces[0])
@@ -230,7 +256,14 @@ def build_audio(
             start = cursor / rate
             duration = len(samples) / rate
             words = None
-            if spoken_words:
+            heard = None
+            if not spoken_words and aligner is not None:
+                heard = whisper_words(aligner, cached)
+            if heard:
+                words = align_by_text(
+                    sentence, [(w.text, w.start, w.end) for w in heard], start, duration
+                )
+            elif spoken_words:
                 words = align_word_timings(
                     sentence,
                     [(w.text, w.start, w.end) for w in spoken_words],

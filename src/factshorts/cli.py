@@ -56,6 +56,9 @@ SourceTextOpt = Annotated[str | None, typer.Option("--source-text", help="Use th
 NoFactcheckOpt = Annotated[
     bool, typer.Option("--no-factcheck", help="Opinion/creative video; labeled UNVERIFIED")
 ]
+ThemeOpt = Annotated[str | None, typer.Option(help="Theme: default, neon, papercut, watercolor")]
+VoiceOpt = Annotated[str | None, typer.Option(help="TTS voice, e.g. am_michael, af_heart")]
+MusicOpt = Annotated[bool | None, typer.Option("--music/--no-music", help="Background music")]
 ForceOpt = Annotated[
     bool, typer.Option("--force", help="Make it even if it looks like a duplicate")
 ]
@@ -70,12 +73,18 @@ def _settings(
     source_text: str | None,
     no_factcheck: bool,
     force: bool,
+    theme: str | None = None,
+    voice: str | None = None,
+    music: bool | None = None,
 ) -> dict[str, Any]:
     s: dict[str, Any] = {
         "length": length or cfg.script.default_length,
         "tone": tone or cfg.script.default_tone,
         "factcheck": not no_factcheck,
         "force": force,
+        "theme": theme,
+        "voice": voice,
+        "music": music,
     }
     if source_url:
         s["source_url"] = source_url
@@ -103,6 +112,9 @@ def make(
     source_text: SourceTextOpt = None,
     no_factcheck: NoFactcheckOpt = False,
     force: ForceOpt = False,
+    theme: ThemeOpt = None,
+    voice: VoiceOpt = None,
+    music: MusicOpt = None,
     config: ConfigOpt = None,
 ) -> None:
     """Make videos now: from --idea, an --ideas-file, or ideas generated for a --topic."""
@@ -112,7 +124,17 @@ def make(
 
     cfg, db = _bootstrap(config)
     defaults = _settings(
-        cfg, length, tone, source_url, source_file, source_text, no_factcheck, force
+        cfg,
+        length,
+        tone,
+        source_url,
+        source_file,
+        source_text,
+        no_factcheck,
+        force,
+        theme,
+        voice,
+        music,
     )
     pipeline = Pipeline(cfg, db)
     todo: list[tuple[Idea, int | None]] = []
@@ -173,6 +195,26 @@ def answer(
         typer.echo(f"Job {job_id} cancelled.")
         return
     typer.echo(f"Making a corrected video for job {job_id}...")
+    raise typer.Exit(_run(pipeline, job_id))
+
+
+@app.command()
+def rerender(
+    job_id: str,
+    theme: ThemeOpt = None,
+    voice: VoiceOpt = None,
+    music: MusicOpt = None,
+    config: ConfigOpt = None,
+) -> None:
+    """Render a job again with another theme, voice or music; script and checks are kept."""
+    from factshorts.core.pipeline import Pipeline
+
+    cfg, db = _bootstrap(config)
+    pipeline = Pipeline(cfg, db)
+    try:
+        pipeline.rerender(job_id, theme=theme, voice=voice, music=music)
+    except (ValueError, FileNotFoundError) as exc:
+        _fail(str(exc))
     raise typer.Exit(_run(pipeline, job_id))
 
 
@@ -243,6 +285,9 @@ def queue_add(
     source_text: SourceTextOpt = None,
     no_factcheck: NoFactcheckOpt = False,
     force: ForceOpt = False,
+    theme: ThemeOpt = None,
+    voice: VoiceOpt = None,
+    music: MusicOpt = None,
     config: ConfigOpt = None,
 ) -> None:
     """Add custom ideas to the inbox."""
@@ -250,7 +295,17 @@ def queue_add(
 
     cfg, db = _bootstrap(config)
     defaults = _settings(
-        cfg, length, tone, source_url, source_file, source_text, no_factcheck, force
+        cfg,
+        length,
+        tone,
+        source_url,
+        source_file,
+        source_text,
+        no_factcheck,
+        force,
+        theme,
+        voice,
+        music,
     )
     try:
         ideas = [parse_idea_line(i, defaults) for i in idea or []]

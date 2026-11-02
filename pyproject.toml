@@ -22,6 +22,7 @@ dependencies = [
     "numpy>=2.4",
     # voice (Kokoro, Apache 2.0) and its English text frontend
     "kokoro>=0.9.4",
+    "faster-whisper>=1.2",  # caption timing for voices without timestamps
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     # AI visuals: Z-Image-Turbo, Depth Anything V2, Wan 2.2 (all Apache 2.0)
     "torch>=2.11",

@@ -1,0 +1,28 @@
+# Theme: soft, calm watercolor paintings.
+name = "watercolor"
+
+[colors]
+background_top = "#1e2a3a"
+background_bottom = "#2f4a5a"
+background_accent = "#8fc1d4"
+text = "#ffffff"
+accent = "#ffd56b"
+caption = "#ffffff"
+caption_stroke = "#14202c"
+muted = "#d6e6ee"
+particle = "#ffffff"
+
+[fonts]
+display = "BebasNeue-Regular.ttf"
+display_weight = 0
+body = "Montserrat-Variable.ttf"
+body_weight = 800
+small_weight = 600
+
+[animation]
+speed = 0.9
+particles = 24
+
+[art]
+style_name = "a soft watercolor painting"
+style = "soft watercolor painting, gentle washes of color, visible paper texture, calm and airy, no text, no letters, no watermark"

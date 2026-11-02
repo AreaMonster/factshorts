@@ -252,16 +252,8 @@ def concat(segments: list[Path], out: Path) -> None:
     )
 
 
-def mux(
-    video: Path,
-    narration: Path,
-    out: Path,
-    duration: float,
-    lufs: float,
-    audio_bitrate: str,
-) -> None:
-    """Add narration (loudness-normalized, padded/trimmed to the video length)."""
-    af = f"loudnorm=I={lufs}:TP=-1.5:LRA=11,aresample=48000,apad"
+def mux(video: Path, audio: Path, out: Path, duration: float, audio_bitrate: str) -> None:
+    """Add the mastered audio (padded/trimmed to the video length) to the video."""
     run(
         [
             ffmpeg_bin(),
@@ -272,7 +264,7 @@ def mux(
             "-i",
             str(video),
             "-i",
-            str(narration),
+            str(audio),
             "-map",
             "0:v:0",
             "-map",
@@ -280,7 +272,7 @@ def mux(
             "-c:v",
             "copy",
             "-af",
-            af,
+            "apad",
             "-c:a",
             "aac",
             "-b:a",

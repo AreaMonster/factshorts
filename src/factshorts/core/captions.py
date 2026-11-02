@@ -92,6 +92,53 @@ def proportional_word_timings(
     return out
 
 
+def align_by_text(
+    sentence: str,
+    timed: list[tuple[str, float, float]],
+    start: float,
+    duration: float,
+) -> list[WordTiming] | None:
+    """Align a transcript that is written like the display text (e.g. Whisper: '8,849') by
+    matching letters and digits; each display word takes the times of its matched letters."""
+    from difflib import SequenceMatcher
+
+    words = sentence.split()
+    if not words or not timed:
+        return None
+    disp, owner = [], []
+    for i, w in enumerate(words):
+        for ch in re.sub(r"[^0-9a-z]", "", w.lower()):
+            disp.append(ch)
+            owner.append(i)
+    heard: list[str] = []
+    spans: list[tuple[float, float]] = []  # each heard character's time slot
+    for text, t0, t1 in timed:
+        chars = re.sub(r"[^0-9a-z]", "", text.lower())
+        n = max(1, len(chars))
+        for k, ch in enumerate(chars):
+            heard.append(ch)
+            spans.append((t0 + (t1 - t0) * k / n, t0 + (t1 - t0) * (k + 1) / n))
+    matcher = SequenceMatcher(None, "".join(disp), "".join(heard), autojunk=False)
+    times: dict[int, list[tuple[float, float]]] = {}
+    for a, b, size in matcher.get_matching_blocks():
+        for k in range(size):
+            times.setdefault(owner[a + k], []).append(spans[b + k])
+    if len(times) < len(words) * 0.6:
+        return None  # too little of the sentence was recognized
+    out: list[WordTiming] = []
+    last = 0.0
+    for i, w in enumerate(words):
+        t0 = min(a for a, _ in times[i]) if i in times else last
+        last = max(b for _, b in times[i]) if i in times else t0
+        out.append(WordTiming(text=w, start=round(start + t0, 4), end=round(start + last, 4)))
+    out[0].start = round(start, 4)
+    for a, b in itertools.pairwise(out):
+        b.start = max(b.start, a.start)
+        a.end = b.start
+    out[-1].end = round(start + duration, 4)
+    return out
+
+
 def caption_chunks(
     words: list[WordTiming], max_words: int = 4, max_chars: int = 22
 ) -> list[list[WordTiming]]:

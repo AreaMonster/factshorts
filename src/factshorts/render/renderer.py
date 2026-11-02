@@ -12,12 +12,14 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-from factshorts.config import RenderConfig
+from factshorts.config import AudioConfig, RenderConfig
 from factshorts.core.captions import caption_chunks
 from factshorts.models import AudioPlan, RenderResult, Script, WordTiming
 from factshorts.render import ffmpeg
+from factshorts.render.audio import loudness, make_music, master
 from factshorts.render.background import Background
 from factshorts.render.easing import ease_out_back, ease_out_cubic, progress
+from factshorts.render.infographics import draw_infographic, fade, plan_infographic
 from factshorts.render.layout import SafeZone, fit_text
 from factshorts.render.themes import Theme, load_theme
 from factshorts.render.timeline import segment_frame_ranges, total_frames
@@ -37,6 +39,7 @@ class SegmentSpec:
     end_frame: int
     words: list[dict[str, float | str]] = field(default_factory=list)
     background: str | None = None  # AI background clip with exactly this segment's frames
+    narration: str = ""
 
 
 @dataclass
@@ -148,6 +151,13 @@ class SegmentPainter:
         self.main_layer = self._main_layer()
         self.number_match = NUMBER_RE.search(self.seg.on_screen_text)
         self.extra = self._end_card() if self.seg.role == "outro" else None
+        self.info = (
+            plan_infographic(self.seg.visual, self.seg.on_screen_text, self.seg.narration)
+            if self.seg.role == "scene"
+            else None
+        )
+        if self.info is not None and self.info.kind == "quote":
+            self.main_layer = None  # the quote card shows the text itself
 
     # main on-screen text
     def _main_layer(self, text: str | None = None) -> Image.Image | None:
@@ -269,6 +279,19 @@ class SegmentPainter:
                 alpha=min(ease_out_cubic(progress(local, 0.3, 0.5)), p_out),
             )
 
+        # scene-type graphic (comparison bars, timeline, list, quote, pin) mid-screen
+        if self.info is not None:
+            width = self.zone.inner_width if self.info.kind != "pin" else int(260 * self.s)
+            graphic = draw_infographic(
+                self.info, self.theme, local, width, self.s, self.spec.source_label
+            )
+            cy = self.zone.top + int(800 * self.s)
+            frame.paste(
+                fade(graphic, p_out),
+                (int(self.zone.center_x - graphic.width / 2), int(cy - graphic.height / 2)),
+                fade(graphic, p_out),
+            )
+
         # captions (word-by-word highlight) in the lower safe area
         for ci, chunk in enumerate(self.chunks):
             if chunk[0].start <= t < self._chunk_end(ci):
@@ -358,6 +381,7 @@ def build_specs(
                     end_frame=end,
                     words=words,
                     background=(backgrounds or {}).get(seg.id),
+                    narration=seg.narration,
                 ),
                 out=str(out_dir / f"{i:02d}_{seg.id}.mp4"),
             )
@@ -381,7 +405,11 @@ def render_video(
     source_label: str,
     theme: str | None = None,
     backgrounds: dict[str, str] | None = None,
+    audio_cfg: AudioConfig | None = None,
+    music_seed: int | None = None,
 ) -> RenderResult:
+    """Render all scenes, then mix narration with (optional) music and master the loudness.
+    `music_seed` None = no music."""
     render_dir.mkdir(parents=True, exist_ok=True)
     codec = ffmpeg.pick_encoder(cfg.encoder)
     specs = build_specs(script, audio, cfg, codec, render_dir, source_label, theme, backgrounds)
@@ -403,9 +431,25 @@ def render_video(
     ffmpeg.concat([Path(o) for o in outs], video_only)
     final = render_dir / "final.mp4"
     duration = specs[0].total_frames / cfg.fps
-    ffmpeg.mux(
-        video_only, audio_dir / audio.wav, final, duration, cfg.lufs_target, cfg.audio_bitrate
+    music_path, music_note = None, None
+    if music_seed is not None:
+        music_path = render_dir / "music.wav"
+        music_note = make_music(music_path, duration, music_seed)
+    mastered = render_dir / "master.wav"
+    master(
+        audio_dir / audio.wav,
+        mastered,
+        duration,
+        cfg.lufs_target,
+        audio_cfg or AudioConfig(),
+        music_path,
     )
+    ffmpeg.mux(video_only, mastered, final, duration, cfg.audio_bitrate)
     return RenderResult(
-        video=str(final), duration=duration, frames=specs[0].total_frames, encoder=codec
+        video=str(final),
+        duration=duration,
+        frames=specs[0].total_frames,
+        encoder=codec,
+        music=music_note,
+        lufs=loudness(final),
     )

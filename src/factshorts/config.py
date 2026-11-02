@@ -157,7 +157,9 @@ class TTSConfig(_Section):
     scene_pause_ms: int = 450
     lead_in_ms: int = 150
     tail_ms: int = 600
-    use_whisper: bool = False
+    # Word timings via faster-whisper when the voice engine reports none (Piper).
+    use_whisper: bool = True
+    whisper_model: str = "small.en"
     pronunciations: dict[str, str] = Field(default_factory=dict)
 
 
@@ -172,6 +174,13 @@ class RenderConfig(_Section):
     video_quality: int = 20
     audio_bitrate: str = "192k"
     lufs_target: float = -14.0
+
+
+class AudioConfig(_Section):
+    music: bool = True  # background music under the narration
+    music_volume_db: float = -16.0  # music level before ducking
+    duck_threshold: float = 0.02  # voice level at which the music starts to duck
+    duck_ratio: float = 8.0  # how strongly the music ducks under the voice
 
 
 class VisualsConfig(_Section):
@@ -237,6 +246,7 @@ class Config(BaseModel):
     render: RenderConfig = Field(default_factory=RenderConfig)
     visuals: VisualsConfig = Field(default_factory=VisualsConfig)
     ideas: IdeasConfig = Field(default_factory=IdeasConfig)
+    audio: AudioConfig = Field(default_factory=AudioConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     web: WebConfig = Field(default_factory=WebConfig)
 
