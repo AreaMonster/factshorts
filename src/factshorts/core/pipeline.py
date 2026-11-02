@@ -277,6 +277,11 @@ class Pipeline:
         if theme is not None:
             load_theme(theme)  # fails early with the list of available themes
         wd = self.workdir(job_id)
+        # Jobs made before Phase 4 stored a fingerprint of the raw idea.json, which the change
+        # below breaks; restamp the finished steps first so sources, script and checks are kept.
+        for step in STEPS[: STEPS.index("voice")]:
+            if self._is_done(job_id, step, wd):
+                self.db.set_step_hash(job_id, step, self._input_hash(wd, step))
         idea = wd.read_model("idea.json", Idea)
         updates = {
             k: v for k, v in (("theme", theme), ("voice", voice), ("music", music)) if v is not None

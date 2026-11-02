@@ -142,6 +142,32 @@ def test_rerender_redoes_only_voice_onward(
 
 
 @needs_ffmpeg
+def test_rerender_keeps_script_of_jobs_with_old_fingerprints(
+    cfg: Config, db: Database, source: SourceDoc, script: Script
+) -> None:
+    cfg.render.width, cfg.render.height = 270, 480
+    llm = FakeLLM(
+        {
+            "ArticleGuess": [ArticleGuess(article_title=source.title, search_query=source.title)],
+            "LLMScript": [script_to_llm(script)],
+        }
+    )
+    pipeline = Pipeline(cfg, db, Services(llm=llm, wiki=FakeWiki(source), synth_factory=FakeSynth))
+    job_id = pipeline.create_job(Idea(text="How high is Mount Testa?", length=30))
+    assert pipeline.run(job_id) is not None
+    wd = pipeline.workdir(job_id)
+    for step in ("sourcing", "premise", "script", "verification"):  # as stored before Phase 4
+        db.set_step_hash(job_id, step, pipeline._legacy_hash(wd, step))
+    calls = len(llm.calls)
+
+    pipeline.rerender(job_id, theme="watercolor")
+    log: list[tuple[str, str]] = []
+    assert pipeline.run(job_id, progress=lambda s, m: log.append((s, m))) is not None
+    assert {s for s, m in log if m == "started"} == {"voice", "visuals", "render", "export"}
+    assert len(llm.calls) == calls
+
+
+@needs_ffmpeg
 def test_final_video_reports_music_and_loudness(
     cfg: Config, db: Database, source: SourceDoc, script: Script
 ) -> None:
