@@ -24,8 +24,11 @@ class Infographic:
     caption: str = ""
 
 
-def plan_infographic(visual: str, on_screen_text: str, narration: str) -> Infographic | None:
-    """Decide what to draw for a scene; None when its data does not fit the scene type."""
+def plan_infographic(
+    visual: str, on_screen_text: str, narration: str, places: list[str] | None = None
+) -> Infographic | None:
+    """Decide what to draw for a scene; None when its data does not fit the scene type.
+    A map pin needs `places` (place names found in the narration); it is labeled with them."""
     combined = f"{on_screen_text}. {narration}"
     numbers = [q for q in parse_quantities(combined) if not q.is_year]
     years = sorted(
@@ -46,8 +49,8 @@ def plan_infographic(visual: str, on_screen_text: str, narration: str) -> Infogr
             return Infographic("list", [], [i[0].upper() + i[1:] for i in items])
     if visual == "quote" and on_screen_text.strip():
         return Infographic("quote", [], [on_screen_text.strip()])
-    if visual == "map_pin":
-        return Infographic("pin", [], [])
+    if visual == "map_pin" and places:
+        return Infographic("pin", [], places[:3])
     return None
 
 
@@ -184,13 +187,36 @@ def draw_infographic(
             )
         return layer
 
-    # pin: a location pin that drops in and pulses
+    # pin: a location pin that drops in and pulses, with the place name(s) under it
     size = int(260 * s)
-    layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    label = " · ".join(info.items)
+    lines = wrap(label, body, width - int(80 * s))[:2] if label else []
+    line_h = int(sum(body.getmetrics()) * 1.05)
+    label_h = int(40 * s) + line_h * len(lines) if lines else 0
+    layer = Image.new("RGBA", (width, size + label_h), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     drop = ease_out_back(progress(t, 0.3, 0.6))
+    if lines:
+        appear = ease_out_cubic(progress(t, 0.55, 0.85))
+        if appear > 0:
+            box_w = max(body.getlength(line) for line in lines) + int(56 * s)
+            x0, y0 = (width - box_w) / 2, size - int(6 * s)
+            _rounded(
+                d,
+                (x0, y0, x0 + box_w, y0 + label_h - int(10 * s)),
+                int(18 * s),
+                (18, 18, 24, int(190 * appear)),
+            )
+            for i, line in enumerate(lines):
+                w = body.getlength(line)
+                d.text(
+                    ((width - w) / 2, y0 + int(16 * s) + i * line_h),
+                    line,
+                    font=body,
+                    fill=(*text[:3], int(255 * appear)),
+                )
     if drop > 0:
-        cx, cy = size / 2, size * 0.42 - (1 - drop) * 80 * s
+        cx, cy = width / 2, size * 0.42 - (1 - drop) * 80 * s
         pulse = (t * 1.2) % 1.0
         rr = size * 0.18 + size * 0.25 * pulse
         d.ellipse(

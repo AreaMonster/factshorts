@@ -79,7 +79,7 @@ def test_thumbnail_is_vertical_jpeg(tmp_path: Path) -> None:
         ("timeline", "First ascent", "It was climbed in 1953 after attempts in 1921.", "timeline"),
         ("icon_list", "granite, gneiss and limestone", "", "list"),
         ("quote", "The strongest greenhouse effect", "", "quote"),
-        ("map_pin", "Himalayas", "", "pin"),
+        ("map_pin", "Himalayas", "", None),  # no place found in the narration: no pin
         ("image", "Anything", "", None),
     ],
 )
@@ -247,3 +247,27 @@ def ffmpeg_durations(path: Path) -> tuple[float, float]:
 
     d = ffmpeg.stream_durations(path)
     return round(d["video"], 2), round(d["audio"], 1)
+
+
+def test_map_pin_is_labeled_with_the_places() -> None:
+    info = plan_infographic("map_pin", "", "", ["Giornico", "Sedrun"])
+    assert info is not None and info.kind == "pin" and info.items == ["Giornico", "Sedrun"]
+    layer = draw_infographic(info, load_theme("default"), 3.0, 900, 1.0)
+    assert layer.width == 900 and layer.height > 260  # room for the label under the pin
+    assert np.asarray(layer)[260:, :, 3].max() > 0  # the label is drawn
+
+
+def test_places_are_found_only_where_the_narration_names_one() -> None:
+    from factshorts.render.places import _nlp, find_places
+
+    if _nlp() is None:
+        pytest.skip("spaCy English model not installed")
+    assert find_places("Mount Everest lies on the border between Nepal and China.") == [
+        "Mount Everest",
+        "Nepal",
+        "China",
+    ]
+    assert find_places("It is listed as Vulnerable on the IUCN Red List.") == []
+    assert find_places("Most of the bones of the skull are flat bones.") == []
+    assert find_places("Venus is the second planet from the Sun.") == []  # not on a map
+    assert find_places("It straddles the China-Nepal border.") == ["China", "Nepal"]

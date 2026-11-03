@@ -21,6 +21,7 @@ from factshorts.render.background import Background
 from factshorts.render.easing import ease_out_back, ease_out_cubic, progress
 from factshorts.render.infographics import draw_infographic, fade, plan_infographic
 from factshorts.render.layout import SafeZone, fit_text
+from factshorts.render.places import find_places
 from factshorts.render.themes import Theme, load_theme
 from factshorts.render.timeline import segment_frame_ranges, total_frames
 
@@ -40,6 +41,7 @@ class SegmentSpec:
     words: list[dict[str, float | str]] = field(default_factory=list)
     background: str | None = None  # AI background clip with exactly this segment's frames
     narration: str = ""
+    places: list[str] = field(default_factory=list)  # place names, for the map pin
 
 
 @dataclass
@@ -152,7 +154,9 @@ class SegmentPainter:
         self.number_match = NUMBER_RE.search(self.seg.on_screen_text)
         self.extra = self._end_card() if self.seg.role == "outro" else None
         self.info = (
-            plan_infographic(self.seg.visual, self.seg.on_screen_text, self.seg.narration)
+            plan_infographic(
+                self.seg.visual, self.seg.on_screen_text, self.seg.narration, self.seg.places
+            )
             if self.seg.role == "scene"
             else None
         )
@@ -281,7 +285,7 @@ class SegmentPainter:
 
         # scene-type graphic (comparison bars, timeline, list, quote, pin) mid-screen
         if self.info is not None:
-            width = self.zone.inner_width if self.info.kind != "pin" else int(260 * self.s)
+            width = self.zone.inner_width
             graphic = draw_infographic(
                 self.info, self.theme, local, width, self.s, self.spec.source_label
             )
@@ -382,6 +386,8 @@ def build_specs(
                     words=words,
                     background=(backgrounds or {}).get(seg.id),
                     narration=seg.narration,
+                    # Found here, once: the language model is too slow to load in every worker.
+                    places=find_places(seg.narration) if seg.visual == "map_pin" else [],
                 ),
                 out=str(out_dir / f"{i:02d}_{seg.id}.mp4"),
             )
