@@ -609,10 +609,16 @@ class Pipeline:
         if nli is not None and self.cfg.script.repeat_entailment:
             entails = lambda p, h: nli.scores(p, h).get("entailment", 0.0)  # noqa: E731
         names = {w.lower() for w in subject_names(source)}
-        deduped, removed = dedupe_script(
-            script, self.cfg.script.min_scenes, entails, self.cfg.script.repeat_entailment, names
-        )
-        if removed or len(deduped.scenes) != len(script.scenes):
+        # First with the NLI model (reworded repeats too), then only near-identical text, which
+        # removes less, if the first result does not pass the checks again.
+        for how, ent in (("reworded", entails), ("exact", None)):
+            if how == "exact" and entails is None:
+                break
+            deduped, removed = dedupe_script(
+                script, self.cfg.script.min_scenes, ent, self.cfg.script.repeat_entailment, names
+            )
+            if not removed and len(deduped.scenes) == len(script.scenes):
+                break
             n += 1
             check = verifier.verify(deduped, attempt=n)
             wd.write_model(f"verification_attempt{n}.json", check)
@@ -622,6 +628,14 @@ class Pipeline:
                     f"removed {removed} repeated sentence(s); {len(deduped.scenes)} scenes",
                 )
                 script, result = deduped, check
+                break
+            notify(
+                "verification",
+                f"removing {removed} repeat(s) ({how}) broke the checks; "
+                + ("trying exact repeats only" if how == "reworded" else "keeping them"),
+            )
+            for f in check.failures:
+                log.info("  - %s", f)
         wd.write_model("script.json", script)
         wd.write_model("verification.json", result)
         notify(

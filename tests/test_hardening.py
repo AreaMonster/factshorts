@@ -280,3 +280,58 @@ def test_redo_from_a_step_keeps_the_earlier_ones(
     assert pipeline.run(job_id, progress=lambda s, m: log.append((s, m))) is not None
     assert [s for s, m in log if m == "started"] == STEPS[STEPS.index("verification") :]
     assert sum(1 for name, _ in llm.calls if name == "LLMScript") == 1  # no new draft
+
+
+# --- found in the Phase 6 bones sample ---------------------------------------------------
+
+
+def test_removing_a_repeat_does_not_turn_a_word_into_a_name(source: SourceDoc) -> None:
+    """'Tourists' opening a sentence is an ordinary word because 'tourists' is used elsewhere;
+    deleting that other sentence (a repeat) must not make it look like an invented name."""
+    from factshorts.config import VerificationConfig
+    from factshorts.models import Claim, Segment
+    from factshorts.verify.aggregate import Verifier
+
+    quote = "Around 35,000 people visit the Testa National Park each year."
+
+    def seg(text: str) -> Segment:
+        return Segment(
+            narration=text, on_screen_text="", claims=[Claim(text=text, source_quote=quote)]
+        )
+
+    hook = seg("Tourists visit the park every year.")
+    extra = seg("About 35,000 tourists visit the park every year.")
+    outro = Segment(narration="", on_screen_text="")
+    full = Script(title="Mount Testa", hook=hook, scenes=[extra], outro=outro).assign_ids()
+    trimmed = Script(title="Mount Testa", hook=hook, scenes=[], outro=outro).assign_ids()
+    cfg = VerificationConfig(nli_check=False, llm_judge=False, wikidata_check=False)
+
+    fresh = Verifier(cfg, source).verify(trimmed.model_copy(deep=True))
+    assert any("Tourists" in f for f in fresh.failures)  # alone, it looks like a name
+
+    verifier = Verifier(cfg, source)
+    assert verifier.verify(full.model_copy(deep=True)).passed
+    assert verifier.verify(trimmed.model_copy(deep=True)).passed  # after removing a sentence
+
+
+def test_last_scene_repeating_the_outro_is_removed() -> None:
+    from factshorts.core.script import dedupe_script
+    from factshorts.models import Claim, Segment
+
+    def seg(text: str, fact: bool = True) -> Segment:
+        claims = [Claim(text=text, source_quote="q")] if fact else []
+        return Segment(narration=text, on_screen_text="", claims=claims)
+
+    script = Script(
+        title="Bones",
+        hook=seg("Babies have about 300 bones."),
+        scenes=[
+            seg("Adults have 206 bones."),
+            seg("Many bones fuse as we grow."),
+            seg("Thanks for watching!", fact=False),
+        ],
+        outro=seg("Thanks for watching!", fact=False),
+    ).assign_ids()
+    out, removed = dedupe_script(script, 2)
+    assert removed == 1
+    assert [s.narration for s in out.segments].count("Thanks for watching!") == 1

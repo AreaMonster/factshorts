@@ -83,6 +83,10 @@ class Verifier:
             self._sentences += sents
             self._sentences += [f"{a} {b}" for a, b in itertools.pairwise(sents)]
         self._snapped: dict[str, float] = {}  # exact source sentence → writer's similarity
+        # Every narration checked so far. Words used in lowercase there are ordinary words, so
+        # "Babies" opening a sentence is not taken for a name just because a later edit (e.g.
+        # removing a repeat) deleted the only other "babies".
+        self._texts: list[str] = []
 
     # --- public -------------------------------------------------------------------------
 
@@ -114,9 +118,12 @@ class Verifier:
         With `only`, just those segments are checked (the title too is skipped)."""
         self.snap_quotes(script)
         cfg = self.cfg
+        for text in (s.narration for s in script.segments):
+            if text and text not in self._texts:
+                self._texts.append(text)
         vocab = build_vocab(
             self.source.text,
-            *(s.narration for s in script.segments),
+            *self._texts,
             *(s.on_screen_text for s in script.segments),
         )
         claim_verdicts: list[ClaimVerdict] = []
