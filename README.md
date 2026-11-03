@@ -151,6 +151,7 @@ factshorts queue add "idea" | queue generate --topic space | queue list | queue 
 factshorts batch --per-topic 2                      # inbox first, then new auto ideas
 factshorts answer <job_id> corrected|cancel         # for false-premise ideas
 factshorts resume <job_id> [--from verification]    # continue after a crash, or redo from a step
+factshorts resume <job_id> --from visuals            # draw all pictures again
 factshorts rerender <job_id> --theme watercolor --voice af_heart --no-music
 factshorts review                                   # approve/reject in the terminal
 factshorts jobs

@@ -407,6 +407,9 @@ class Pipeline:
             raise ValueError(f"no job {job_id}")
         for later in STEPS[STEPS.index(step) :]:
             self.db.set_step(job_id, later, "stale")
+        if step == "visuals":
+            # Redoing the pictures means new pictures: forget the checked ones it would reuse.
+            self.workdir(job_id).path("visuals", "visuals.json").unlink(missing_ok=True)
         self.db.update_job(job_id, state="queued", error=None)
 
     def _is_done(self, job_id: str, step: str, wd: WorkDir) -> bool:

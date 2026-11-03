@@ -13,7 +13,7 @@ import numpy as np
 from PIL import Image
 
 from factshorts.config import Config
-from factshorts.core.art import ImageReviewer, ImageVerdict, plan_shots
+from factshorts.core.art import ImageReviewer, ImageVerdict, plan_shots, subject_noun
 from factshorts.core.llm import LLM
 from factshorts.models import AudioPlan, SceneVisual, Script, SourceDoc, VisualsPlan
 from factshorts.render import ffmpeg
@@ -54,12 +54,12 @@ def choose_kinds(script: Script, mode: str, wan_scenes: int, include_hook: bool)
     return {i: ("wan" if i in chosen else "parallax") for i in ids}
 
 
-# Plain but different pictures for scenes whose drawings kept failing the check.
+# Plain but different pictures for scenes whose drawings kept failing the check. They suit any
+# subject (an animal, a planet, a building), and they are checked like every other picture.
 FALLBACK_FRAMINGS = [
-    "the main subject seen from far away, small in a wide sky",
-    "a close-up of the main subject's surface texture",
-    "the main subject partly hidden behind soft clouds, seen from the side",
-    "a calm horizon with the main subject low in the sky",
+    "a simple, calm full view of the main subject, centered, plain background",
+    "the main subject in its usual surroundings, seen from the side",
+    "a close-up portrait of the main subject, soft light",
 ]
 
 
@@ -110,12 +110,22 @@ class VisualBuilder:
         if v.mode == "off":
             return VisualsPlan(mode="off")
         shots = script.model_copy(deep=True)
-        self.names = set(subject_names(source)) if source else set()
+        # A common-noun subject ("cheetah") is named in prompts; proper names are not.
+        self.noun = subject_noun(source)
+        noun_words = set(self.noun.split()) if self.noun else set()
+        self.names = {
+            n for n in (subject_names(source) if source else set()) if n.lower() not in noun_words
+        }
         self.look = ""
         self.title = source.title if source else script.title
         old: dict[str, SceneVisual] = {}
         if previous is not None and previous.style == self.theme.art.style:
-            old = {s.narration: s for s in previous.scenes if s.narration}
+            # Pictures that never passed the check (old unchecked fallbacks) are drawn again.
+            old = {
+                s.narration: s
+                for s in previous.scenes
+                if s.narration and not s.review.startswith(("fallback", "unchecked"))
+            }
             self.look = previous.look
         reuse = {s.id: old[s.narration] for s in shots.segments if s.narration in old}
         if reuse:
@@ -130,6 +140,7 @@ class VisualBuilder:
                 self.theme.art.style_name,
                 context,
                 self.names,
+                self.noun,
             )
         (out_dir / "shots.json").write_text(
             json.dumps(
@@ -234,7 +245,7 @@ class VisualBuilder:
         if cached.is_file():
             return ImageVerdict.model_validate_json(cached.read_text(encoding="utf-8"))
         base = s.prompt.removesuffix(f". {self.theme.art.style}")
-        verdict = self.reviewer.review(path, narration, base, self.title, self.look)
+        verdict = self.reviewer.review(path, narration, base, self.title, self.look, self.noun)
         cached.write_text(verdict.model_dump_json(), encoding="utf-8")
         return verdict
 
@@ -268,18 +279,9 @@ class VisualBuilder:
                 if not failing:
                     break
                 if rnd == self.v.max_redraws:
-                    # Out of redraws: fall back to a plain picture of the subject.
-                    for k, (s, verdict) in enumerate(failing):
-                        s.review = "fallback: " + "; ".join(verdict.problems)[:300]
-                        framing = FALLBACK_FRAMINGS[k % len(FALLBACK_FRAMINGS)]
-                        plain = (
-                            f"{framing}, simple and calm. The main subject: {self.look}"
-                            if self.look
-                            else f"{framing} of a calm, simple landscape under a soft sky"
-                        )
-                        s.prompt, s.seed = f"{plain}. {style}", s.seed + 1000
+                    # Out of redraws: plain pictures of the subject, checked as well.
                     unload_llm()
-                    self._draw([s for s, _ in failing], notify, "fallback pictures")
+                    self._fallbacks([s for s, _ in failing], scenes, narration, notify, style)
                     break
                 notify(
                     f"redrawing {len(failing)} picture(s) that did not fit: "
@@ -289,7 +291,7 @@ class VisualBuilder:
                     log.info("picture %s rejected: %s", s.segment_id, verdict.problems)
                     base = s.prompt.removesuffix(f". {style}")
                     new = self.reviewer.revise(
-                        narration[s.segment_id], base, verdict, self.look, self.names
+                        narration[s.segment_id], base, verdict, self.look, self.names, self.noun
                     )
                     s.prompt, s.seed = f"{new}. {style}", s.seed + 1
                     s.review = "pending"
@@ -305,6 +307,48 @@ class VisualBuilder:
             s.image = dst.name
             images[s.segment_id] = Image.open(dst).convert("RGB")
         return images
+
+    def _fallbacks(
+        self,
+        failing: list[SceneVisual],
+        scenes: list[SceneVisual],
+        narration: dict[str, str],
+        notify: Notify,
+        style: str,
+    ) -> None:
+        """Plain pictures for scenes that kept failing. Each one is checked; if none fits, the
+        scene reuses a picture that passed (a correct repeat beats a wrong picture)."""
+        problems = {s.segment_id: s.review for s in failing}
+        todo = list(failing)
+        for k, framing in enumerate(FALLBACK_FRAMINGS):
+            if not todo:
+                return
+            for i, s in enumerate(todo):
+                if self.look:
+                    plain = f"{framing}. The main subject: {self.look}"
+                else:
+                    plain = f"{FALLBACK_FRAMINGS[(k + i) % len(FALLBACK_FRAMINGS)]}"
+                s.prompt, s.seed = f"{plain}. {style}", s.seed + 1000
+            self._draw(todo, notify, "plain pictures")
+            notify(f"checking {len(todo)} plain picture(s)")
+            still = []
+            for s in todo:
+                verdict = self._review(s, narration[s.segment_id])
+                if verdict.matches:
+                    s.review = f"plain picture ({framing.split(',')[0]})"
+                else:
+                    still.append(s)
+                    problems[s.segment_id] = "; ".join(verdict.problems)[:300]
+            todo = still
+        approved = [s for s in scenes if s.review.startswith(("ok", "plain")) and s not in todo]
+        for i, s in enumerate(todo):
+            if approved:
+                good = approved[i % len(approved)]
+                s.prompt, s.seed = good.prompt, good.seed
+                s.review = f"reused the picture of {good.segment_id} (no fitting picture found)"
+            else:
+                s.review = "unchecked: no picture passed (" + problems[s.segment_id][:200] + ")"
+            log.info("picture %s: %s", s.segment_id, s.review)
 
     def _motion_clips(
         self, scenes: list[SceneVisual], images: dict[str, Image.Image], notify: Notify

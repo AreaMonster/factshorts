@@ -113,14 +113,14 @@ class FakeReviewer:
         self.fixable = fixable
         self.reviews = 0
 
-    def review(self, image, narration, prompt, title, subject_look) -> ImageVerdict:
+    def review(self, image, narration, prompt, title, subject_look, noun=None) -> ImageVerdict:
         self.reviews += 1
         bad = self.reject_word in prompt
         return ImageVerdict(
             shows="a picture", problems=["shows rings"] if bad else [], matches=not bad
         )
 
-    def revise(self, narration, prompt, verdict, subject_look, names) -> str:
+    def revise(self, narration, prompt, verdict, subject_look, names, noun=None) -> str:
         return prompt.replace(self.reject_word, "plain") if self.fixable else prompt
 
 
@@ -165,8 +165,35 @@ def test_unfixable_picture_falls_back_to_plain_subject(
 ) -> None:
     plan, _gen = _build(cfg, script, tmp_path, FakeReviewer("ringed", fixable=False))
     s1 = next(s for s in plan.scenes if s.segment_id == "s1")
-    assert s1.review.startswith("fallback: shows rings")
-    assert "calm, simple landscape" in s1.prompt  # no subject look known
+    # The plain picture is checked too; it has no rings, so it passes.
+    assert s1.review.startswith("plain picture")
+    assert "ringed" not in s1.prompt
+
+
+class RejectsNarration(FakeReviewer):
+    """Rejects every picture for narration containing a word (or every picture: '')."""
+
+    def __init__(self, word: str) -> None:
+        super().__init__(reject_word="never-in-a-prompt")
+        self.word = word
+
+    def review(self, image, narration, prompt, title, subject_look, noun=None) -> ImageVerdict:
+        self.reviews += 1
+        bad = self.word in narration
+        problems = ["wrong animal"] if bad else []
+        return ImageVerdict(shows="a picture", problems=problems, matches=not bad)
+
+
+@needs_ffmpeg
+def test_scene_with_no_fitting_picture_reuses_an_approved_one(
+    cfg: Config, script: Script, tmp_path
+) -> None:
+    word = script.scenes[0].narration.split()[2]  # only in s1
+    plan, _gen = _build(cfg, script, tmp_path, RejectsNarration(word))
+    s1 = next(s for s in plan.scenes if s.segment_id == "s1")
+    assert s1.review.startswith("reused the picture of ")
+    donor = next(s for s in plan.scenes if s.segment_id == s1.review.split()[4])
+    assert donor.review.startswith("ok") and (s1.prompt, s1.seed) == (donor.prompt, donor.seed)
 
 
 def test_hook_that_keeps_failing_is_replaced_by_first_scene(
@@ -321,14 +348,14 @@ def test_fallback_pictures_differ(cfg: Config, script: Script, tmp_path) -> None
         image_gen=FakeImageGen(),
         depth=FakeDepth(),
         motion=FakeMotion(),
-        reviewer=FakeReviewer("ringed", fixable=False),
+        reviewer=RejectsNarration(""),  # nothing ever passes
     )
     out = tmp_path / "visuals"
     out.mkdir()
     plan = builder.build("job", script, audio, out, None, lambda: None, lambda m: None)
     prompts = [s.prompt for s in plan.scenes]
-    assert all(s.review.startswith("fallback") for s in plan.scenes)
-    assert len(set(prompts[:4])) == 4  # four different framings before they repeat
+    assert all(s.review.startswith("unchecked: no picture passed") for s in plan.scenes)
+    assert len(set(prompts[:3])) == 3  # different plain framings, not one picture everywhere
 
 
 def test_editing_pass_cannot_move_facts_between_segments(
@@ -411,3 +438,54 @@ def test_contained_sentence_is_a_repeat_but_numbers_keep_sentences_apart() -> No
     text = " ".join(s.narration for s in out.segments)
     assert removed == 1 and "This makes Venus the hottest" not in text
     assert "108 million" in text and "58 million" in text
+
+
+# --- the subject's kind is named (cheetah), proper names are not (Venus) -------------------
+
+
+def _doc(title: str, text: str, parts: int = 1) -> SourceDoc:
+    from factshorts.models import Section, SourceRef
+
+    refs = [SourceRef(title=f"{title} {i}") for i in range(parts)] if parts > 1 else []
+    return SourceDoc(
+        kind="wikipedia",
+        title=title,
+        sections=[Section(index=0, title=title, text=text)],
+        sha256="x",
+        parts=refs,
+    )
+
+
+def test_subject_noun_only_for_common_words() -> None:
+    from factshorts.core.art import subject_noun
+
+    cheetah = "The cheetah is a large cat. The cheetah is the fastest land animal. Cheetahs hunt."
+    assert subject_noun(_doc("Cheetah", cheetah)) == "cheetah"
+    assert subject_noun(_doc("Bone", "A bone is a rigid organ. Each bone has marrow.")) == "bone"
+    venus = "Venus is the second planet. Venus has no moons. It orbits the Sun."
+    assert subject_noun(_doc("Venus", venus)) is None
+    assert subject_noun(_doc("Mount Everest", "Mount Everest is high. Climbers love it.")) is None
+    assert subject_noun(_doc("Cheetah", cheetah, parts=2)) is None  # a comparison
+    assert subject_noun(None) is None
+
+
+def test_shots_name_a_common_noun_subject(script: Script) -> None:
+    shots = ShotList(
+        subject_look="A slender, long-limbed feline with solid black spots and tear marks.",
+        shots=[
+            Shot(
+                segment_id=s.id,
+                image_prompt=f"A cheetah running across a dry plain, view {s.id}",
+                shows_subject=True,
+                motion="grass sways",
+                visual_interest=3,
+            )
+            for s in script.segments
+        ],
+    )
+    llm = FakeLLM({"ShotList": [shots]})
+    out, look = plan_shots(script, llm, "m", "flat vector art", "", {"Acinonyx"}, "cheetah")
+    assert look.startswith("a cheetah: ")  # the look names the kind of animal
+    assert all("cheetah" in s.image_prompt.lower() for s in out.segments)  # not stripped
+    prompt = llm.calls[0][1][0]["content"]
+    assert "a CHEETAH" in prompt and 'Use the word "cheetah"' in prompt

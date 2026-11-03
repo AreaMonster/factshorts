@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from rapidfuzz import fuzz
 
 from factshorts.core.llm import LLM
-from factshorts.models import Script
+from factshorts.models import Script, SourceDoc
 
 log = logging.getLogger(__name__)
 
@@ -27,8 +27,9 @@ class Shot(BaseModel):
 
 class ShotList(BaseModel):
     subject_look: str = Field(
-        description="15-30 words: how the video's main subject looks (colors, shape, surface), "
-        "taken from SOURCE CONTEXT, without its name"
+        description="15-30 words: what kind of thing the main subject is (e.g. 'a cheetah', "
+        "'a planet') and how it looks (colors, shape, surface), taken from SOURCE CONTEXT, "
+        "without proper names"
     )
     shots: list[Shot]
 
@@ -46,15 +47,19 @@ class RevisedShot(BaseModel):
 ART_PROMPT = """You are the art director of an educational animated video drawn as {style_name}.
 For every segment below, describe ONE illustration that shows what its narration is about.
 
+THE VIDEO IS ABOUT {subject_line}
+
 RULES
 - The image model does not know names. Never use proper names (not "{title_hint}", not
-  places or people); describe what things LOOK like instead.
-- First write subject_look: how the main subject of the video looks, using only appearance
-  details from SOURCE CONTEXT (colors, clouds, surface, shape). If SOURCE CONTEXT does not say,
-  keep it plain. Also say what it does NOT have that drawings often add by mistake
-  (e.g. "no rings, no moons" for a planet without them). Set shows_subject = true for shots
-  where the main subject is visible; its look is then added to the prompt automatically, so do
-  not describe it again.
+  places or people); describe what things LOOK like instead. Ordinary words for kinds of
+  things (an animal, a plant, an organ, a tool) are not names: always use them.
+- First write subject_look: what kind of thing the main subject is and how it looks, using
+  only appearance details from SOURCE CONTEXT (colors, shape, surface). If SOURCE CONTEXT does
+  not say, keep it plain. Also say what it does NOT have that drawings of this kind of thing
+  often add by mistake, if anything (a planet without rings: "no rings"; a cat without a mane:
+  "no mane"). Do not list things that have nothing to do with the subject.
+  Set shows_subject = true for shots where the main subject is visible; its look is then added
+  to the prompt automatically, so do not describe it again.
 - Describe a picture of a place, landscape, object or action. Never an infographic: no
   charts, graphs, timelines, columns, icons, maps, pins, diagrams or labels.
 - No text, letters, numbers, signs, flags or logos anywhere in the picture.
@@ -86,24 +91,29 @@ Problems: {problems}
 
 Write a new image prompt (25-45 words) for a picture that fits the narration and avoids these
 problems. Same rules: no names, no text/numbers/labels/flags, no infographics, nothing the
-narration or the subject description does not support. The main subject looks like this
-(include it if the subject is visible): {subject_look}"""
+narration or the subject description does not support.{noun_hint} The main subject looks like
+this (include it if the subject is visible): {subject_look}"""
 
 REVIEW_PROMPT = """This illustration is for an educational cartoon-style video about {title}.
-The main subject looks like: {subject_look}
+The main subject is {subject}. It looks like: {subject_look}
 It is shown while the narrator says: "{narration}"
-Intended picture: {prompt}
+(The artist was asked for: {prompt}. That is only a guide: a different pose, composition,
+framing or number of figures is fine.)
 
-Describe briefly what the picture shows. Then list only CLEAR problems:
-- the wrong object (a different planet, landmark or animal), or features the subject definitely
-  does not have (e.g. rings or moons around a planet that has none, Earth's continents on
-  another planet);
+Describe briefly what the picture shows, and name the kind of animal, object or place you see.
+Then list only CLEAR problems, judged against the NARRATION and the subject:
+- the wrong kind of thing: a different animal, plant, planet, landmark or object than the one
+  the narration is about (e.g. a leopard, tiger or house cat drawn instead of a cheetah);
+- features that kind of thing definitely does not have (rings or moons around a planet that
+  has none, a mane on a cheetah, Earth's continents on another planet);
 - any text, letters, numbers, labels, flags or logos;
 - realistic depictions of identifiable people;
-- something that plainly contradicts the narration.
-Do NOT count as problems: the flat cartoon style, simplification, exact color shades, missing
-details, the size, position, distance or framing of the subject, or a general picture for a
-sentence without facts (such as "Thanks for watching!").
+- something that plainly contradicts what the narration states.
+Do NOT count as problems: the flat cartoon style, simplification, exact colors or markings,
+missing details (something the narration or the guide mentions that the picture leaves out is
+not a contradiction), a pose, action or composition that differs from the artist's guide, the size,
+position, distance or framing of the subject, or a general picture for a sentence without facts
+(such as "Thanks for watching!").
 matches = true when there are no clear problems."""
 
 # Suggested framing per segment, rotated so consecutive shots look different.
@@ -160,6 +170,22 @@ def similar_shots(shots: dict[str, Shot], threshold: float = 80) -> list[tuple[s
     ]
 
 
+def subject_noun(source: SourceDoc | None) -> str | None:
+    """The article's title as an ordinary word ("Cheetah" -> "cheetah", "Bone" -> "bone") when
+    the source itself uses it in lowercase; None for proper names (Venus, Mount Everest) and
+    comparisons of two subjects. The image model knows what a cheetah looks like; a
+    description alone ("a spotted feline") also fits a leopard or a house cat."""
+    if source is None or len(source.refs) != 1:
+        return None
+    title = re.sub(r"\s*\([^)]*\)", "", source.refs[0].title).strip()
+    low = title.lower()
+    if not low or title.isupper():
+        return None
+    lower = len(re.findall(rf"\b{re.escape(low)}(?:s|es)?\b", source.text))
+    capital_mid = len(re.findall(rf"(?<=[a-z,;] ){re.escape(title)}\b", source.text))
+    return low if lower >= 2 and lower >= capital_mid else None
+
+
 def compose_prompt(image_prompt: str, shows_subject: bool, subject_look: str) -> str:
     if shows_subject and subject_look:
         return f"{image_prompt.rstrip('. ')}. The main subject: {subject_look}"
@@ -173,6 +199,7 @@ def plan_shots(
     style_name: str,
     context: str = "",
     names: set[str] | None = None,
+    noun: str | None = None,
 ) -> tuple[Script, str]:
     """Fill image_prompt / motion / visual_interest for every segment of `script`.
 
@@ -192,6 +219,13 @@ def plan_shots(
                 segments=segments,
                 context=context.strip() or "(none)",
                 title_hint=next(iter(sorted(names)), "the subject's name"),
+                subject_line=(
+                    f'a {noun.upper()}. Use the word "{noun}" in subject_look and in every '
+                    f"prompt that shows it: the image model knows exactly what a {noun} looks "
+                    "like, a description alone does not tell it."
+                    if noun
+                    else "a named subject. Never write its name; describe how it looks."
+                ),
             ),
         }
     ]
@@ -232,6 +266,8 @@ def plan_shots(
             },
         ]
     look = sanitize(_strip_names(look, names))
+    if noun and not re.search(rf"\b{re.escape(noun)}", look, re.I):
+        look = f"a {noun}: {look}" if look else f"a {noun}"
     for seg in script.segments:
         shot = shots.get(seg.id)
         prompt = sanitize(_strip_names(shot.image_prompt, names)) if shot else ""
@@ -252,11 +288,18 @@ class ImageReviewer:
         self.model = model
 
     def review(
-        self, image: Path, narration: str, prompt: str, title: str, subject_look: str
+        self,
+        image: Path,
+        narration: str,
+        prompt: str,
+        title: str,
+        subject_look: str,
+        noun: str | None = None,
     ) -> ImageVerdict:
         data = base64.b64encode(image.read_bytes()).decode()
         content = REVIEW_PROMPT.format(
             title=title,
+            subject=f"a {noun}" if noun else title,
             subject_look=subject_look or "(not given)",
             narration=narration,
             prompt=prompt,
@@ -272,7 +315,13 @@ class ImageReviewer:
         return verdict
 
     def revise(
-        self, narration: str, prompt: str, verdict: ImageVerdict, subject_look: str, names: set[str]
+        self,
+        narration: str,
+        prompt: str,
+        verdict: ImageVerdict,
+        subject_look: str,
+        names: set[str],
+        noun: str | None = None,
     ) -> str:
         result = self.llm.structured(
             [
@@ -284,6 +333,7 @@ class ImageReviewer:
                         shows=verdict.shows,
                         problems="; ".join(verdict.problems),
                         subject_look=subject_look,
+                        noun_hint=f' Call the main subject "{noun}".' if noun else "",
                     ),
                 }
             ],
