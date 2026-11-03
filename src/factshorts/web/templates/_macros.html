@@ -1,13 +1,21 @@
 {% macro state_badge(state) -%}
-{%- set cls = {"done": "ok", "running": "info", "working": "info", "queued": "muted", "needs_input": "warn"}.get(state, "bad") -%}
-<span class="badge {{ cls }}">{{ {"needs_input": "needs your answer", "working": "working"}.get(state, state) }}</span>
+{%- set cls = {"done": "ok", "running": "info", "working": "info", "queued": "muted", "needs_input": "warn", "cancelling": "warn"}.get(state, "bad") -%}
+<span class="badge {{ cls }}">{{ {"needs_input": "needs your answer", "working": "working", "done": "finished"}.get(state, state) }}</span>
 {%- endmacro %}
 
+{# The eight pipeline steps as a labeled bar (job page). #}
 {% macro steps(job) -%}
-<div class="steps">
+<div class="stepper">
   {% for name, status in job.steps %}
-  <span class="step {{ status }}" title="{{ status or 'not started' }}">{{ name }}</span>
+  <div class="{{ status }}" title="{{ name }}: {{ status or 'not started' }}">{{ name }}</div>
   {% endfor %}
+</div>
+{%- endmacro %}
+
+{# The same steps as a compact bar (jobs list). #}
+{% macro progress(job) -%}
+<div class="progress" role="img" aria-label="{{ job.done_steps }} of {{ job.steps | length }} steps done">
+  {% for name, status in job.steps %}<span class="seg {{ status }}" title="{{ name }}: {{ status or 'not started' }}"></span>{% endfor %}
 </div>
 {%- endmacro %}
 
@@ -19,4 +27,20 @@
 {%- else -%}
 <span class="badge bad">UNVERIFIED</span>
 {%- endif -%}
+{%- endmacro %}
+
+{# One video in the review queue or the library. #}
+{% macro video_card(it, href) -%}
+{% set v = it.v %}
+<div class="video-card">
+  <a class="cover" href="{{ href }}">
+    {% if it.jpg %}<img class="thumb" src="/media/{{ v.job_id }}/{{ it.jpg }}" alt="" loading="lazy">{% else %}<div class="thumb"></div>{% endif %}
+    {% if it.duration %}<span class="dur">{{ it.duration | duration }}</span>{% endif %}
+  </a>
+  <div class="body">
+    <h3><a href="{{ href }}">{{ v.title }}</a></h3>
+    <div class="row small muted">{{ label_badge(v.verified) }} {{ v.created_at | when }}</div>
+    {{ caller() if caller }}
+  </div>
+</div>
 {%- endmacro %}

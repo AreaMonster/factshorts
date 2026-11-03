@@ -1,27 +1,31 @@
-{% from "_macros.html" import state_badge, steps, label_badge %}
+{% from "_macros.html" import state_badge, progress, label_badge %}
 {% if not jobs %}
-<p class="muted">No jobs yet. Start one on the <a href="/create">Create</a> page.</p>
+<div class="empty"><b>No jobs yet</b><p>Start one on the Create page.</p><a class="button primary" href="/create">Create a video</a></div>
 {% else %}
-<table>
-  <thead><tr><th>Idea</th><th>State</th><th class="opt">Progress</th><th class="opt">Updated</th></tr></thead>
-  <tbody>
+<div class="joblist">
   {% for j in jobs %}
-    <tr>
-      <td>
-        <a href="/jobs/{{ j.id }}">{{ j.idea.text }}</a>
-        {% if not j.idea.factcheck %}<span class="badge bad">no fact-check</span>{% endif %}
-        {% if j.error and j.raw_state in ("rejected", "failed", "needs_input") %}
-        <div class="muted small">{{ j.error.splitlines()[0][:160] }}</div>
-        {% endif %}
-      </td>
-      <td>
+  <div class="job-row">
+    <a class="job-thumb" href="/{{ 'review' if j.video else 'jobs' }}/{{ j.id }}" tabindex="-1" aria-hidden="true">
+      {% if j.thumb %}<img src="/media/{{ j.id }}/thumbnail.jpg" alt="" loading="lazy">{% endif %}
+    </a>
+    <div>
+      <a class="job-title" href="/jobs/{{ j.id }}">{{ j.idea.text }}</a>
+      <div class="job-meta">
         {{ state_badge(j.state) }}
-        {% if j.video %}<div style="margin-top:.3rem"><a class="small" href="/review/{{ j.id }}">review</a> {{ label_badge(j.video.verified) }}</div>{% endif %}
-      </td>
-      <td class="opt">{{ steps(j) }}</td>
-      <td class="opt muted small">{{ j.updated | when }}</td>
-    </tr>
+        {% if j.step and j.raw_state == "running" %}<span>{{ j.step }}…</span>{% endif %}
+        {% if not j.idea.factcheck %}<span class="badge bad">no fact-check</span>{% endif %}
+        <span>{{ j.updated | when }}</span>
+      </div>
+      {% if j.raw_state not in ("done", "rejected") %}{{ progress(j) }}{% endif %}
+      {% if j.error and j.raw_state in ("rejected", "failed", "needs_input") %}
+      <div class="job-error">{{ j.error.splitlines()[0][:160] }}</div>
+      {% endif %}
+    </div>
+    <div class="job-actions">
+      {% if j.video %}{{ label_badge(j.video.verified) }}<a class="button small" href="/review/{{ j.id }}">Review</a>
+      {% elif j.state == "needs_input" %}<a class="button small primary" href="/jobs/{{ j.id }}">Answer</a>{% endif %}
+    </div>
+  </div>
   {% endfor %}
-  </tbody>
-</table>
+</div>
 {% endif %}

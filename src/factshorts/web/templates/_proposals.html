@@ -6,23 +6,23 @@
     <tbody>
     {% for p in proposals %}
       <tr>
-        <td><input type="checkbox" name="p-{{ loop.index }}-pick" checked aria-label="use this idea"></td>
+        <td style="padding-top:1.05rem"><input type="checkbox" name="p-{{ loop.index }}-pick" checked aria-label="use this idea"></td>
         <td>
           <input type="text" name="p-{{ loop.index }}-text" value="{{ p.text }}">
-          <div class="muted small">{{ p.topic }} · {{ p.angle }}</div>
+          <div class="muted small" style="margin-top:.2rem">{{ p.topic }} · {{ p.angle }}</div>
           <input type="hidden" name="p-{{ loop.index }}-article" value="{{ p.article }}">
           <input type="hidden" name="p-{{ loop.index }}-angle" value="{{ p.angle }}">
           <input type="hidden" name="p-{{ loop.index }}-topic" value="{{ p.topic }}">
         </td>
-        <td class="opt"><a href="https://en.wikipedia.org/wiki/{{ p.article | replace(' ', '_') }}" target="_blank" rel="noopener">{{ p.article }}</a></td>
+        <td class="opt small" style="padding-top:1rem"><a href="https://en.wikipedia.org/wiki/{{ p.article | replace(' ', '_') }}" target="_blank" rel="noopener">{{ p.article }}</a></td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
-  <p class="row">
+  <div class="actions">
     <button class="primary" type="submit" name="action" value="queue">Add ticked to inbox</button>
     <button type="submit" name="action" value="make">Make ticked now</button>
-  </p>
+  </div>
 </form>
 {% elif not errors %}
 <p class="muted">No new ideas: every candidate was a duplicate or had no Wikipedia article. Try again or another topic.</p>

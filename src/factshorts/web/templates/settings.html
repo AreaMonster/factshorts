@@ -5,14 +5,18 @@
 <label class="check"><input type="checkbox" name="{{ key }}" {{ 'checked' if value }}> {{ text }}</label>
 {%- endmacro %}
 {% block content %}
-<h1>Settings</h1>
+<div class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p class="muted small">Changes are saved in the database and override <code>config.toml</code>, which stays as it is.
+    {% if overrides %}Changed here: {{ overrides | list | reject("equalto", "web.password_hash") | join(", ") or "nothing" }}.{% endif %}</p>
+  </div>
+</div>
 {% if message %}<p class="notice ok">{{ message }}</p>{% endif %}
 {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
-<p class="muted small">Changes are saved in the database and override <code>config.toml</code>, which stays as it is.
-{% if overrides %}Changed here: {{ overrides | list | reject("equalto", "web.password_hash") | join(", ") or "nothing" }}.{% endif %}</p>
 
 <div class="card">
-  <div class="row spread"><h2 style="margin:0">Health</h2>
+  <div class="card-head"><h2>Health</h2>
     <button class="small" hx-get="/settings/health" hx-target="#health" hx-indicator="#health-spin">Run checks</button></div>
   <div id="health" hx-get="/settings/health" hx-trigger="load"><span id="health-spin" class="htmx-indicator muted small"><span class="spinner"></span> checking…</span></div>
 </div>
@@ -98,11 +102,13 @@
       <p class="muted small">Relative paths are inside the data folder ({{ cfg.data_dir }}).</p>
     </div>
   </div>
-  <p class="row"><button class="primary" type="submit">Save settings</button></p>
+  <div class="savebar">
+    <span class="muted small">Settings apply to new jobs.</span>
+    <button class="ghost" type="submit" form="reset-form">Reset to config.toml</button>
+    <button class="primary" type="submit">Save settings</button>
+  </div>
 </form>
-<form method="post" action="/settings/reset" onsubmit="return confirm('Undo every change made here and use config.toml again?')">
-  <button class="small" type="submit">Reset to config.toml</button>
-</form>
+<form id="reset-form" method="post" action="/settings/reset" onsubmit="return confirm('Undo every change made here and use config.toml again?')"></form>
 
 <div class="grid two" style="margin-top:1rem">
   <form class="card" method="post" action="/settings/piper-download">

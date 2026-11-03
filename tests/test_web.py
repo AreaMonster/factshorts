@@ -99,10 +99,18 @@ def test_create_review_and_approve(client: TestClient, cfg: Config) -> None:
     assert "_no-music.mp4" in page.text
     assert "TikTok caption" in page.text and "#facts" in page.text
     assert "oldid=" in page.text or "Mount Testa" in page.text  # article (revision) link
+    # The thumbnail is shown and can be downloaded on its own.
+    assert "Download thumbnail" in page.text
+    assert f"/media/{job_id}/thumbnail.jpg?download=1" in page.text
     video = client.get(f"/api/jobs/{job_id}").json()["video"]
     mp4 = next(p.name for p in Path(video["folder"]).glob("*.mp4"))
     assert client.get(f"/media/{job_id}/{mp4}").headers["content-type"] == "video/mp4"
-    assert job_id in client.get("/review").text
+    thumb = client.get(f"/media/{job_id}/thumbnail.jpg?download=1")
+    assert thumb.headers["content-type"] == "image/jpeg"
+    assert "attachment" in thumb.headers["content-disposition"]
+    queue = client.get("/review").text
+    assert job_id in queue and f"/media/{job_id}/thumbnail.jpg" in queue
+    assert 'class="count"' in queue  # the navigation shows how many videos wait
 
     assert client.post(f"/review/{job_id}/approve").status_code == 303
     video = client.get(f"/api/jobs/{job_id}").json()["video"]

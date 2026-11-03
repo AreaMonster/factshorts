@@ -1,14 +1,17 @@
 {% extends "base.html" %}
 {% block title %}Jobs · factshorts{% endblock %}
 {% block content %}
-<h1>Jobs</h1>
+<div class="page-head">
+  <h1>Jobs</h1>
+  <a class="button primary" href="/create">New video</a>
+</div>
 <div class="card" hx-ext="sse" sse-connect="/jobs/stream" sse-swap="jobs">
   {{ jobs_html | safe }}
 </div>
 
-<div class="grid two">
+<div class="grid two" style="align-items:start">
   <div class="card">
-    <div class="row spread"><h2 style="margin:0">Inbox</h2><span class="muted small">{{ inbox | length }} queued</span></div>
+    <div class="card-head"><h2>Inbox</h2><span class="muted small">{{ inbox | length }} queued</span></div>
     {% if inbox %}
     <table>
       <tbody>
@@ -17,24 +20,26 @@
           <td>{{ item.idea.text }}
             <div class="muted small">{{ item.idea.origin }}{% if item.article %} · Wikipedia: {{ item.article }}{% endif %}{% if not item.idea.factcheck %} · no fact-check{% endif %}</div>
           </td>
-          <td style="white-space:nowrap">
+          <td style="white-space:nowrap; text-align:right">
             <form class="inline" method="post" action="/inbox/{{ item.id }}/make"><button class="small" type="submit">Make</button></form>
-            <form class="inline" method="post" action="/inbox/{{ item.id }}/remove"><button class="small danger" type="submit">Remove</button></form>
+            <form class="inline" method="post" action="/inbox/{{ item.id }}/remove"><button class="small ghost danger" type="submit">Remove</button></form>
           </td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
     {% else %}
-    <p class="muted">Empty. Add ideas on the <a href="/create">Create</a> page.</p>
+    <p class="muted small">Empty. Use <b>Add to inbox</b> on the <a href="/create">Create</a> page to collect ideas for later.</p>
     {% endif %}
+  </div>
 
+  <div class="card">
     <h2>Batch run</h2>
-    <p class="muted small">Makes every inbox idea first, then new automatic ideas for the ticked topics.</p>
+    <p class="muted small" style="margin-top:0">Makes every inbox idea first, then new suggested ideas for the ticked topics.</p>
     <form method="post" action="/batch">
-      <div class="row">
+      <div class="chips">
         {% for t in topics %}
-        <label class="check"><input type="checkbox" name="topics" value="{{ t }}"> {{ t }}</label>
+        <label class="chip"><input type="checkbox" name="topics" value="{{ t }}"><span>{{ t }}</span></label>
         {% endfor %}
       </div>
       <label for="per_topic">New ideas per topic (0 = inbox only)</label>
@@ -44,27 +49,27 @@
       </div>
     </form>
   </div>
-
-  <div class="card">
-    <h2 style="margin-top:0">Rejections</h2>
-    {% if rejections %}
-    <table>
-      <tbody>
-      {% for r in rejections %}
-        <tr>
-          <td>{{ r.idea }}
-            <div class="muted small">{{ r.step or "" }}: {{ r.reason[:300] }}</div>
-          </td>
-          <td class="muted small" style="white-space:nowrap">
-            {% if r.job_id %}<a href="/jobs/{{ r.job_id }}">job</a> · {% endif %}{{ r.created_at | when }}
-          </td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="muted">None so far.</p>
-    {% endif %}
-  </div>
 </div>
+
+<details class="card" style="margin-top:1rem">
+  <summary><h2>Rejected ideas <span class="muted small" style="font-weight:400">{{ rejections | length }}</span></h2></summary>
+  {% if rejections %}
+  <table>
+    <tbody>
+    {% for r in rejections %}
+      <tr>
+        <td>{{ r.idea }}
+          <div class="muted small">{{ r.step or "" }}: {{ r.reason[:300] }}</div>
+        </td>
+        <td class="muted small" style="white-space:nowrap; text-align:right">
+          {% if r.job_id %}<a href="/jobs/{{ r.job_id }}">job</a> · {% endif %}{{ r.created_at | when }}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted small">None so far.</p>
+  {% endif %}
+</details>
 {% endblock %}

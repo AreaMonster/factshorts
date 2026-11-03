@@ -36,7 +36,7 @@ from factshorts.web.app import (
     save_upload,
     sse_response,
     sse_stream,
-    video_files,
+    video_card,
 )
 
 Text = Annotated[str, Form()]
@@ -320,7 +320,7 @@ def register(app: FastAPI, state: App) -> None:
     @app.get("/review", response_class=HTMLResponse)
     def review_list(request: Request):
         videos = db.query("SELECT * FROM videos WHERE status = 'pending' ORDER BY created_at DESC")
-        return state.render(request, "review_list.html", videos=videos)
+        return state.render(request, "review_list.html", items=[video_card(v) for v in videos])
 
     @app.get("/review/{job_id}", response_class=HTMLResponse)
     def review_page(request: Request, job_id: str, message: str = ""):
@@ -444,10 +444,11 @@ def register(app: FastAPI, state: App) -> None:
                 "SELECT DISTINCT topic FROM videos WHERE topic IS NOT NULL ORDER BY topic"
             )
         ]
-        items = []
-        for v in videos:
-            folder = Path(v["folder"])
-            items.append({"v": v, **video_files(folder)})
+        items = [video_card(v) for v in videos]
+        by_status = {
+            r["status"]: r["n"]
+            for r in db.query("SELECT status, COUNT(*) AS n FROM videos GROUP BY status")
+        }
         return state.render(
             request,
             "library.html",
@@ -458,6 +459,7 @@ def register(app: FastAPI, state: App) -> None:
             verified=verified,
             since=since,
             status=status,
+            by_status=by_status,
         )
 
     @app.post("/library/{job_id}/delete")

@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Job {{ job.id }} · factshorts{% endblock %}
 {% block content %}
-<p class="muted small"><a href="/jobs">← Jobs</a> · job {{ job.id }}</p>
-<h1>{{ job.idea.text }}</h1>
+<p class="crumbs"><a href="/jobs">Jobs</a> / {{ job.id }}</p>
+<div class="page-head"><h1>{{ job.idea.text }}</h1></div>
 <div hx-ext="sse" sse-connect="/jobs/{{ job.id }}/stream" sse-swap="job">
   {{ live_html | safe }}
 </div>

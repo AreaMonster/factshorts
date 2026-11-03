@@ -1,51 +1,48 @@
 {% extends "base.html" %}
-{% from "_macros.html" import label_badge %}
+{% from "_macros.html" import video_card %}
 {% block title %}Library · factshorts{% endblock %}
 {% block content %}
-<h1>Library</h1>
-<form class="card" method="get" action="/library">
-  <div class="grid three" style="gap:.6rem">
-    <div><label for="q">Search titles</label><input id="q" name="q" type="text" value="{{ q }}"></div>
-    <div><label for="topic">Topic</label>
-      <select id="topic" name="topic"><option value="">all</option>{% for t in topics %}<option {{ 'selected' if t == topic }}>{{ t }}</option>{% endfor %}</select></div>
-    <div><label for="verified">Fact-check</label>
-      <select id="verified" name="verified">
-        <option value="">all</option>
-        <option value="yes" {{ 'selected' if verified == 'yes' }}>verified</option>
-        <option value="no" {{ 'selected' if verified == 'no' }}>not verified</option>
-      </select></div>
-    <div><label for="since">Made since</label><input id="since" name="since" type="date" value="{{ since }}"></div>
-    <div><label for="status">Folder</label>
-      <select id="status" name="status">
-        {% for s in ["approved", "pending", "rejected"] %}<option {{ 'selected' if s == status }}>{{ s }}</option>{% endfor %}
-      </select></div>
-  </div>
-  <p><button type="submit">Filter</button></p>
+<div class="page-head"><h1>Library</h1></div>
+
+<nav class="tabs-links" aria-label="Folder">
+  {% for s, name in [("approved", "Approved"), ("pending", "Waiting for review"), ("rejected", "Rejected")] %}
+  <a class="{{ 'on' if s == status }}" href="/library?status={{ s }}">{{ name }}<span class="n">{{ by_status.get(s, 0) }}</span></a>
+  {% endfor %}
+</nav>
+
+<form class="card filters" method="get" action="/library">
+  <input type="hidden" name="status" value="{{ status }}">
+  <div><label for="q">Search titles</label><input id="q" name="q" type="search" value="{{ q }}" placeholder="Everest"></div>
+  <div><label for="topic">Topic</label>
+    <select id="topic" name="topic"><option value="">all</option>{% for t in topics %}<option {{ 'selected' if t == topic }}>{{ t }}</option>{% endfor %}</select></div>
+  <div><label for="verified">Fact-check</label>
+    <select id="verified" name="verified">
+      <option value="">all</option>
+      <option value="yes" {{ 'selected' if verified == 'yes' }}>verified</option>
+      <option value="no" {{ 'selected' if verified == 'no' }}>not verified</option>
+    </select></div>
+  <div><label for="since">Made since</label><input id="since" name="since" type="date" value="{{ since }}"></div>
+  <div class="row"><button type="submit">Filter</button>{% if q or topic or verified or since %}<a class="button ghost" href="/library?status={{ status }}">Clear</a>{% endif %}</div>
 </form>
 
 {% if items %}
-<div class="grid three">
+<div class="video-grid">
   {% for it in items %}
   {% set v = it.v %}
-  <div class="card video-card">
-    <a href="/review/{{ v.job_id }}">
-      {% if it.jpg %}<img class="thumb" src="/media/{{ v.job_id }}/{{ it.jpg }}" alt="" loading="lazy">{% else %}<div class="thumb"></div>{% endif %}
-    </a>
-    <h3><a href="/review/{{ v.job_id }}">{{ v.title }}</a></h3>
-    <div class="row small muted">{{ label_badge(v.verified) }} {{ v.topic or "" }} · {{ v.created_at | when }}</div>
-    <div class="row small" style="margin-top:.5rem">
-      {% if it.mp4 %}<a href="/media/{{ v.job_id }}/{{ it.mp4 }}?download=1">MP4</a>{% endif %}
-      {% if it.mp4_plain %}<a href="/media/{{ v.job_id }}/{{ it.mp4_plain }}?download=1">MP4 without music</a>{% endif %}
-      {% if it.description %}<a href="/media/{{ v.job_id }}/{{ it.description }}?download=1">description</a>{% endif %}
-      {% if it.tiktok %}<a href="/media/{{ v.job_id }}/{{ it.tiktok }}">caption</a>{% endif %}
+  {% call video_card(it, "/review/" ~ v.job_id) %}
+    <div class="links">
+      {% if it.mp4 %}<a class="button small" href="/media/{{ v.job_id }}/{{ it.mp4 }}?download=1" title="Download the video with music">MP4</a>{% endif %}
+      {% if it.mp4_plain %}<a class="button small" href="/media/{{ v.job_id }}/{{ it.mp4_plain }}?download=1" title="Download the video without music">No music</a>{% endif %}
+      {% if it.jpg %}<a class="button small" href="/media/{{ v.job_id }}/{{ it.jpg }}?download=1" title="Download the thumbnail">Cover</a>{% endif %}
       <form class="inline" method="post" action="/library/{{ v.job_id }}/delete" onsubmit="return confirm('Delete this video and its files?')">
-        <button class="small danger" type="submit">Delete</button>
+        <button class="small ghost danger" type="submit">Delete</button>
       </form>
     </div>
-  </div>
+  {% endcall %}
   {% endfor %}
 </div>
 {% else %}
-<p class="muted">No {{ status }} videos{{ " match these filters" if q or topic or verified or since }}.</p>
+<div class="card empty"><b>No {{ {"pending": "videos waiting for review", "approved": "approved videos", "rejected": "rejected videos"}.get(status, "videos") }}{{ " match these filters" if q or topic or verified or since }}</b>
+  <p>{% if status == "approved" %}Approve a video on the Review page and it moves here.{% endif %}</p></div>
 {% endif %}
 {% endblock %}

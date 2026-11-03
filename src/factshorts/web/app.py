@@ -8,7 +8,7 @@ import hashlib
 import json
 import secrets
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -56,6 +56,11 @@ class App:
         self.worker = Worker(db, self.pipeline, threads=self.cfg.web.workers)
         self.templates = Jinja2Templates(directory=WEB_DIR / "templates")
         self.templates.env.filters["when"] = _when
+        self.templates.env.filters["duration"] = _duration
+        # Changes with the stylesheet, so browsers never keep an old copy after an update.
+        css = WEB_DIR / "static" / "app.css"
+        version = int(css.stat().st_mtime) if css.is_file() else 0
+        self.templates.env.globals["asset_version"] = version
         self.templates.env.filters["label_class"] = _label_class
 
     @property
@@ -72,11 +77,22 @@ class App:
     def render(self, request: Request, name: str, **ctx: Any) -> HTMLResponse:
         cfg = self.cfg
         ctx.setdefault("nav", name.split(".")[0].split("_")[0])
+        counts = {}
+        if not cfg.web.password_hash or request.session.get("auth"):
+            counts = self.counts()
         return self.templates.TemplateResponse(
             request,
             name,
-            {"cfg": cfg, "login": bool(cfg.web.password_hash), **ctx},
+            {"cfg": cfg, "login": bool(cfg.web.password_hash), "counts": counts, **ctx},
         )
+
+    def counts(self) -> dict[str, int]:
+        """Numbers shown next to the navigation: videos to review, tasks working or queued."""
+        review = self.db.query("SELECT COUNT(*) AS n FROM videos WHERE status = 'pending'")
+        active = self.db.query(
+            "SELECT COUNT(*) AS n FROM tasks WHERE state IN ('queued', 'running', 'cancelling')"
+        )
+        return {"review": review[0]["n"], "active": active[0]["n"]}
 
     def partial(self, name: str, **ctx: Any) -> str:
         return self.templates.get_template(name).render(cfg=self.cfg, **ctx)
@@ -87,6 +103,13 @@ def _when(ts: float | None) -> str:
         return ""
     d = datetime.fromtimestamp(ts)
     return d.strftime("%H:%M") if d.date() == datetime.now().date() else d.strftime("%b %d, %H:%M")
+
+
+def _duration(seconds: float | None) -> str:
+    if not seconds:
+        return ""
+    s = round(seconds)
+    return f"{s // 60}:{s % 60:02d}"
 
 
 def _label_class(label: str | None) -> str:
@@ -181,7 +204,9 @@ def job_view(state: App, row: Any) -> dict[str, Any]:
         "created": row["created_at"],
         "updated": row["updated_at"],
         "steps": [(s, steps.get(s, "")) for s in STEPS],
+        "done_steps": sum(1 for s in STEPS if steps.get(s) == "done"),
         "video": video,
+        "thumb": video is not None and (Path(video["folder"]) / "thumbnail.jpg").is_file(),
         "busy": busy,
         "last_task": tasks[-1] if tasks else None,
     }
@@ -229,6 +254,8 @@ def review_view(cfg: Config, db: Database, job_id: str) -> dict[str, Any]:
                 s for s in verification.sentences if s.segment_id == seg.id and s.kind != "claim"
             ]
         segments.append({"seg": seg, "claims": claims, "sentences": sentences})
+    checked = [c.passed for s in segments for c in s["claims"]]
+    checked += [x.passed for s in segments for x in s["sentences"]]
     video = db.get_video(job_id)
     files = video_files(Path(video["folder"])) if video is not None else {}
     folder = Path(video["folder"]) if video is not None else None
@@ -243,6 +270,8 @@ def review_view(cfg: Config, db: Database, job_id: str) -> dict[str, Any]:
         "description": text("description"),
         "caption": text("tiktok"),
         "music_default": music_default,
+        "duration": json.loads(text("metadata")).get("duration_s") if "metadata" in files else None,
+        "summary": {"total": len(checked), "failed": checked.count(False)},
         "script": script,
         "source": source,
         "verification": verification,
@@ -253,6 +282,17 @@ def review_view(cfg: Config, db: Database, job_id: str) -> dict[str, Any]:
         "files": files,
         "check_names": CHECK_NAMES,
     }
+
+
+def video_card(row: Any) -> dict[str, Any]:
+    """A video for the card grids: its row, its files by role and its length."""
+    folder = Path(row["folder"])
+    files = video_files(folder)
+    duration = None
+    if "metadata" in files:
+        with suppress(OSError, ValueError):
+            duration = json.loads((folder / files["metadata"]).read_text("utf-8")).get("duration_s")
+    return {"v": row, "duration": duration, **files}
 
 
 def video_files(folder: Path) -> dict[str, str]:

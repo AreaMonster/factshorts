@@ -1,27 +1,23 @@
 {% extends "base.html" %}
 {% block title %}Create · factshorts{% endblock %}
 {% block content %}
-<h1>Create videos</h1>
+<div class="page-head">
+  <div>
+    <h1>Create videos</h1>
+    <p class="muted small">Write a question or let the LLM suggest some. Every fact is checked against the source before it is used.</p>
+  </div>
+</div>
 {% if message %}<p class="notice ok">{{ message }}</p>{% endif %}
 {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
 
-<div class="grid two">
+<div class="grid two" style="align-items:start">
   <form class="card" method="post" action="/create" enctype="multipart/form-data">
-    <h2 style="margin-top:0">Your ideas</h2>
-    <label for="ideas">One idea per line. Optional settings per line: <code>Why is Venus so hot? | length=60 | tone=funny</code></label>
-    <textarea id="ideas" name="ideas" rows="5" placeholder="How tall is Mount Everest?" required></textarea>
+    <h2>Your ideas</h2>
+    <label for="ideas" style="margin-top:0">One idea per line</label>
+    <textarea id="ideas" name="ideas" rows="4" placeholder="How tall is Mount Everest?" required></textarea>
+    <p class="hint">Settings for one line only: <code>Why is Venus so hot? | length=60 | tone=funny</code></p>
 
-    <details>
-      <summary>Use your own source (instead of Wikipedia)</summary>
-      <label for="source_url">Web page</label>
-      <input id="source_url" name="source_url" type="url" placeholder="https://...">
-      <label for="source_file">File (.txt, .md, .pdf)</label>
-      <input id="source_file" name="source_file" type="file" accept=".txt,.md,.pdf">
-      <label for="source_text">Or paste the text</label>
-      <textarea id="source_text" name="source_text" rows="4"></textarea>
-    </details>
-
-    <div class="grid three">
+    <div class="grid four">
       <div>
         <label for="length">Length</label>
         <select id="length" name="length">
@@ -47,36 +43,52 @@
         </select>
       </div>
     </div>
-    <label class="check"><input type="checkbox" name="music" {{ 'checked' if cfg.audio.music }}> Background music</label>
-    <label class="check"><input type="checkbox" name="factcheck" checked onchange="document.getElementById('fc-warn').classList.toggle('hidden', this.checked)"> Fact-check (recommended)</label>
-    <p id="fc-warn" class="notice warn hidden small">Without fact-checking the video is labeled <b>UNVERIFIED</b> in its file name, metadata and here. Use it only for opinions or stories.</p>
-    <label class="check"><input type="checkbox" name="force"> Make it even if it looks like a duplicate</label>
-    <p class="row">
-      <button class="primary" type="submit" name="action" value="make">Make now</button>
-      <button type="submit" name="action" value="queue">Add to inbox</button>
-    </p>
+
+    <div style="margin-top:.6rem">
+      <label class="check"><input type="checkbox" name="music" {{ 'checked' if cfg.audio.music }}> Start with background music <span class="muted small">(both versions are always made)</span></label>
+      <label class="check"><input type="checkbox" name="factcheck" checked onchange="document.getElementById('fc-warn').classList.toggle('hidden', this.checked)"> Fact-check (recommended)</label>
+      <p id="fc-warn" class="notice warn hidden small">Without fact-checking the video is labeled <b>UNVERIFIED</b> in its file name, metadata and here. Use it only for opinions or stories.</p>
+    </div>
+
+    <details>
+      <summary>More options: your own source, duplicates</summary>
+      <label for="source_url">Web page (instead of Wikipedia)</label>
+      <input id="source_url" name="source_url" type="url" placeholder="https://...">
+      <label for="source_file">Or a file (.txt, .md, .pdf)</label>
+      <input id="source_file" name="source_file" type="file" accept=".txt,.md,.pdf">
+      <label for="source_text">Or paste the text</label>
+      <textarea id="source_text" name="source_text" rows="4"></textarea>
+      <label class="check" style="margin-top:.9rem"><input type="checkbox" name="force"> Make it even if it looks like a duplicate</label>
+    </details>
+
+    <div class="actions">
+      <button class="primary big" type="submit" name="action" value="make">Make now</button>
+      <button class="big" type="submit" name="action" value="queue">Add to inbox</button>
+    </div>
   </form>
 
   <div class="card">
-    <h2 style="margin-top:0">Generate ideas</h2>
-    <p class="muted small">The local LLM proposes ideas; each one is checked against Wikipedia (it needs a real article) and against your past ideas.</p>
+    <h2>Need ideas?</h2>
+    <p class="muted small" style="margin-top:0">The local LLM suggests ideas. Each needs a real Wikipedia article and must not repeat a past idea.</p>
     <form hx-post="/ideas/generate" hx-target="#proposals" hx-indicator="#gen-spin">
       <label>Topics</label>
-      <div class="row">
+      <div class="chips">
         {% for t in cfg.ideas.topics %}
-        <label class="check"><input type="checkbox" name="topics" value="{{ t }}"> {{ t }}</label>
+        <label class="chip"><input type="checkbox" name="topics" value="{{ t }}"><span>{{ t }}</span></label>
         {% endfor %}
       </div>
-      <label for="custom_topic">Another topic</label>
-      <input id="custom_topic" name="custom_topic" type="text" placeholder="volcanoes">
-      <label for="count">Ideas per topic</label>
-      <input id="count" name="count" type="number" min="1" max="10" value="3" style="max-width: 7rem">
-      <p class="row">
-        <button type="submit">Generate</button>
-        <span id="gen-spin" class="htmx-indicator muted small"><span class="spinner"></span> asking the LLM (up to a minute)...</span>
-      </p>
+      <div class="grid" style="grid-template-columns: 1fr 7rem; gap: .2rem .8rem">
+        <div><label for="custom_topic">Another topic</label>
+          <input id="custom_topic" name="custom_topic" type="text" placeholder="volcanoes"></div>
+        <div><label for="count">Per topic</label>
+          <input id="count" name="count" type="number" min="1" max="10" value="3"></div>
+      </div>
+      <div class="actions">
+        <button type="submit">Suggest ideas</button>
+        <span id="gen-spin" class="htmx-indicator muted small row"><span class="spinner"></span> asking the LLM (up to a minute)…</span>
+      </div>
     </form>
-    <div id="proposals"></div>
+    <div id="proposals" style="margin-top:1rem"></div>
   </div>
 </div>
 {% endblock %}

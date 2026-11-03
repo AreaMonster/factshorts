@@ -2,10 +2,14 @@
 {% from "_macros.html" import label_badge %}
 {% block title %}Review · {{ script.title }}{% endblock %}
 {% block content %}
-<p class="eyebrow"><a href="/review">review</a> / <a href="/jobs/{{ job.id }}">job {{ job.id }}</a></p>
-<div class="row spread" style="align-items:flex-end; margin-bottom:1.2rem">
-  <h1 style="margin:0">{{ script.title }}</h1>
-  <div class="row">{{ label_badge(None, label) }} {% if video %}<span class="badge">{{ video.status }}</span>{% endif %}</div>
+<p class="crumbs"><a href="/review">Review</a> / <a href="/jobs/{{ job.id }}">job {{ job.id }}</a></p>
+<div class="page-head">
+  <h1>{{ script.title }}</h1>
+  <div class="row">
+    {{ label_badge(None, label) }}
+    {% if video %}<span class="badge {{ {'approved': 'ok', 'rejected': 'bad'}.get(video.status, 'muted') }}">{{ {"pending": "waiting for review"}.get(video.status, video.status) }}</span>{% endif %}
+    {% if duration %}<span class="badge muted">{{ duration | duration }}</span>{% endif %}
+  </div>
 </div>
 {% if message %}<p class="notice ok">{{ message }}</p>{% endif %}
 {% if job.busy %}<p class="notice warn">This job is working right now (<a href="/jobs/{{ job.id }}">follow its progress</a>). You can change it again when it has finished.</p>{% endif %}
@@ -14,7 +18,7 @@
 {% endif %}
 
 <div class="review">
-  <div class="player">
+  <aside class="player">
     {% if files.mp4 %}
     {% set start_plain = files.mp4_plain and not music_default %}
     <video id="player" controls preload="metadata"
@@ -31,117 +35,166 @@
       {% else %}
       <span class="muted small">No music track (older render)</span>
       {% endif %}
-      <a id="download" class="button primary small" download
+      <a id="download" class="button small" download
          href="/media/{{ job.id }}/{{ files.mp4_plain if start_plain else files.mp4 }}?download=1">Download</a>
     </div>
     {% else %}
-    <p class="muted">No video file yet.</p>
+    <div class="card empty">No video file yet.</div>
     {% endif %}
 
     {% if video and not job.busy %}
-    <div class="row" style="padding:.8rem 0; border-bottom:1px solid var(--rule)">
-      {% if video.status != "approved" %}<form class="inline" method="post" action="/review/{{ job.id }}/approve"><button class="primary" type="submit">Approve</button></form>{% endif %}
-      {% if video.status != "rejected" %}<form class="inline" method="post" action="/review/{{ job.id }}/reject"><button class="danger" type="submit">Reject</button></form>{% endif %}
+      {% if video.status == "pending" %}
+      <div class="decide">
+        <form method="post" action="/review/{{ job.id }}/approve"><button class="primary" type="submit">Approve</button></form>
+        <form method="post" action="/review/{{ job.id }}/reject"><button class="danger" type="submit">Reject</button></form>
+      </div>
+      {% else %}
+      <div class="row spread decided">
+        <span>{{ "Approved" if video.status == "approved" else "Rejected" }}. Changed your mind?</span>
+        {% if video.status != "approved" %}<form class="inline" method="post" action="/review/{{ job.id }}/approve"><button class="small" type="submit">Approve</button></form>{% endif %}
+        {% if video.status != "rejected" %}<form class="inline" method="post" action="/review/{{ job.id }}/reject"><button class="small danger" type="submit">Reject</button></form>{% endif %}
+      </div>
+      {% endif %}
+    {% endif %}
+  </aside>
+
+  <section>
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" id="t-claims" aria-controls="p-claims" onclick="showTab('claims')">Fact-check
+        {% if verification %}<span class="badge {{ 'bad' if summary.failed else 'ok' }}">{{ summary.total - summary.failed }}/{{ summary.total }}</span>{% endif %}</button>
+      <button type="button" role="tab" id="t-post" aria-controls="p-post" onclick="showTab('post')">Post</button>
+      <button type="button" role="tab" id="t-render" aria-controls="p-render" onclick="showTab('render')">Render again</button>
     </div>
-    {% endif %}
 
-    {% if caption %}
-    <div class="caption-box">
-      <h2>TikTok caption</h2>
-      <textarea id="caption" readonly>{{ caption }}</textarea>
-      <div class="row spread" style="margin-top:.5rem">
-        <span class="muted small">Turn on TikTok's "AI-generated content" label when you post.</span>
-        <button class="small" type="button" onclick="copyCaption(this)">Copy</button>
+    <div id="p-post" role="tabpanel" class="tab-panel">
+      {% if caption %}
+      <div class="card caption-box">
+        <div class="card-head"><h2>TikTok caption</h2><button class="small primary" type="button" onclick="copyCaption(this)">Copy</button></div>
+        <textarea id="caption" readonly>{{ caption }}</textarea>
+        <p class="hint">Turn on TikTok's "AI-generated content" label when you post.</p>
       </div>
-    </div>
-    {% endif %}
+      {% endif %}
 
-    <h2>Render again</h2>
-    <form method="post" action="/review/{{ job.id }}/rerender">
-      <div class="grid two" style="gap:.2rem 1rem">
-        <div><label for="rr-theme">Theme</label>
-          <select id="rr-theme" name="theme">{% for t in themes %}<option {{ 'selected' if t == (idea.theme or cfg.render.theme) }}>{{ t }}</option>{% endfor %}</select></div>
-        <div><label for="rr-voice">Voice</label>
-          <select id="rr-voice" name="voice">{% for v in voices %}<option {{ 'selected' if v == (idea.voice or cfg.tts.voice) }}>{{ v }}</option>{% endfor %}</select></div>
-      </div>
-      <label class="check"><input type="checkbox" name="music" {{ 'checked' if music_default }}> Start with music</label>
-      <p class="muted small">Script and fact-checks stay as they are.</p>
-      <button type="submit" {{ 'disabled' if job.busy }}>Re-render</button>
-    </form>
-
-    {% if files.mp4 %}
-    <h2>Files</h2>
-    <p class="small row">
-      {% if files.description %}<a href="/media/{{ job.id }}/{{ files.description }}?download=1">description.txt</a>{% endif %}
-      {% if files.sources %}<a href="/media/{{ job.id }}/{{ files.sources }}" target="_blank">sources.json</a>{% endif %}
-      {% if files.srt %}<a href="/media/{{ job.id }}/{{ files.srt }}?download=1">subtitles</a>{% endif %}
-    </p>
-    {% if description %}<details><summary>Full description with sources (YouTube)</summary><pre class="small">{{ description }}</pre></details>{% endif %}
-    {% endif %}
-  </div>
-
-  <div>
-    <h2 style="margin-top:0">Script and claims</h2>
-    <p class="muted small">
-      Sources:
-      {% for r in source.refs %}
-        {% if r.revision_url %}<a href="{{ r.revision_url }}" target="_blank" rel="noopener">{{ r.title }}{% if r.revision_id %} (revision {{ r.revision_id }}){% endif %}</a>{% else %}{{ r.title }}{% endif %}{{ ", " if not loop.last }}
-      {% endfor %}
-      {% if source.kind == "user" %}<span class="badge info">your source</span>{% endif %}
-    </p>
-    <details class="small"><summary>What the checks mean</summary>
-      <p class="muted">quote: the quoted sentence is in the source · entities: every number, date and name is in the quote · wikidata: numbers agree with Wikidata · nli: a language model says the quote implies the sentence · llm_judge: a second LLM agrees. – means the check does not apply.</p>
-    </details>
-
-    {% for item in segments %}
-    {% set seg = item.seg %}
-    {% set failed = item.claims | selectattr("passed", "false") | list %}
-    <div class="segment {{ 'fail' if failed }}" id="seg-{{ seg.id }}">
-      <div class="row spread">
-        <span class="eyebrow">{{ seg.id }} · {{ seg.visual | replace("_", " ") }}</span>
-        {% if not job.busy and verification %}
-        <span class="row">
-          <button class="small" type="button" onclick="document.getElementById('edit-{{ seg.id }}').classList.toggle('hidden')">Edit</button>
-          <form class="inline" method="post" action="/review/{{ job.id }}/regenerate"><input type="hidden" name="segment" value="{{ seg.id }}"><button class="small" type="submit" title="Let the writer make a new, fact-checked version of this part">Regenerate</button></form>
-        </span>
-        {% endif %}
-      </div>
-      {% if seg.on_screen_text %}<div class="onscreen">{{ seg.on_screen_text }}</div>{% endif %}
-      <div class="narration">{{ seg.narration }}</div>
-
-      <form id="edit-{{ seg.id }}" class="hidden" method="post" action="/review/{{ job.id }}/edit">
-        <input type="hidden" name="segment" value="{{ seg.id }}">
-        <label for="narr-{{ seg.id }}">Narration</label>
-        <textarea id="narr-{{ seg.id }}" name="narration" rows="3">{{ seg.narration }}</textarea>
-        <label for="ost-{{ seg.id }}">On-screen text</label>
-        <input id="ost-{{ seg.id }}" type="text" name="on_screen_text" value="{{ seg.on_screen_text }}">
-        <p class="muted small">Your text is fact-checked against the source. If it passes, the video is rendered again; scenes you did not change keep their voice and picture.</p>
-        <button class="primary small" type="submit">Check and re-render</button>
-      </form>
-
-      {% for c in item.claims %}
-      <div class="claim">
-        {% if item.claims | length > 1 %}<div class="small">{{ c.text }}</div>{% endif %}
-        <blockquote>“{{ c.source_quote }}”</blockquote>
-        <div class="checks">
-          {% for r in c.checks %}
-          <span class="check {{ r.status }}" title="{{ r.reason }}{% if r.score is not none %} (score {{ '%.2f' | format(r.score) }}){% endif %}">{{ r.check }}</span>
-          {% endfor %}
+      {% if files.jpg %}
+      <div class="card">
+        <h2>Thumbnail</h2>
+        <div class="thumb-box">
+          <a href="/media/{{ job.id }}/{{ files.jpg }}" target="_blank" title="Open full size"><img src="/media/{{ job.id }}/{{ files.jpg }}" alt="Thumbnail of {{ script.title }}"></a>
+          <div>
+            <p class="small" style="margin-top:0">Cover picture with the title, made from the first scene. Use it as the cover when you post, or wherever a preview image is needed.</p>
+            <a class="button small" href="/media/{{ job.id }}/{{ files.jpg }}?download=1">Download thumbnail</a>
+          </div>
         </div>
-        {% for r in c.checks | selectattr("status", "equalto", "fail") %}<div class="small" style="color: var(--stop)">{{ r.check }}: {{ r.reason }}</div>{% endfor %}
       </div>
-      {% endfor %}
-      {% for s in item.sentences %}
-      <div class="small {{ 'muted' if s.passed }}" {% if not s.passed %}style="color: var(--stop)"{% endif %}>
-        {% if s.kind == "filler" %}no fact, checked:{% else %}{{ s.kind }}:{% endif %} “{{ s.sentence }}”
+      {% endif %}
+
+      {% if files.mp4 %}
+      <div class="card">
+        <h2>Files</h2>
+        <div class="files">
+          <a href="/media/{{ job.id }}/{{ files.mp4 }}?download=1"><span>Video{{ " with music" if files.mp4_plain }}</span><span>{{ files.mp4 }}</span></a>
+          {% if files.mp4_plain %}<a href="/media/{{ job.id }}/{{ files.mp4_plain }}?download=1"><span>Video without music</span><span>{{ files.mp4_plain }}</span></a>{% endif %}
+          {% if files.jpg %}<a href="/media/{{ job.id }}/{{ files.jpg }}?download=1"><span>Thumbnail</span><span>{{ files.jpg }}</span></a>{% endif %}
+          {% if files.srt %}<a href="/media/{{ job.id }}/{{ files.srt }}?download=1"><span>Subtitles</span><span>{{ files.srt }}</span></a>{% endif %}
+          {% if files.description %}<a href="/media/{{ job.id }}/{{ files.description }}?download=1"><span>Description with sources (YouTube)</span><span>{{ files.description }}</span></a>{% endif %}
+          {% if files.sources %}<a href="/media/{{ job.id }}/{{ files.sources }}" target="_blank"><span>Sources and checks</span><span>{{ files.sources }}</span></a>{% endif %}
+        </div>
+        {% if description %}<details><summary>Show the full description</summary><pre class="small">{{ description }}</pre></details>{% endif %}
+      </div>
+      {% endif %}
+    </div>
+
+    <div id="p-claims" role="tabpanel" class="tab-panel">
+      <p class="muted small" style="margin-top:0">
+        {% if verification %}
+          {% if summary.failed %}<b style="color:var(--bad)">{{ summary.failed }} of {{ summary.total }} sentences failed a check.</b>
+          {% else %}All {{ summary.total }} sentences passed their checks.{% endif %}
+        {% endif %}
+        Sources:
+        {% for r in source.refs %}
+          {% if r.revision_url %}<a href="{{ r.revision_url }}" target="_blank" rel="noopener">{{ r.title }}{% if r.revision_id %} (revision {{ r.revision_id }}){% endif %}</a>{% else %}{{ r.title }}{% endif %}{{ ", " if not loop.last }}
+        {% endfor %}
+        {% if source.kind == "user" %}<span class="badge info">your source</span>{% endif %}
+      </p>
+      <details class="small" style="margin-bottom:.8rem"><summary>What the checks mean</summary>
+        <p class="muted">quote: the quoted sentence is in the source · entities: every number, date and name is in the quote · wikidata: numbers agree with Wikidata · nli: a language model says the quote implies the sentence · llm_judge: a second LLM agrees. – means the check does not apply.</p>
+      </details>
+
+      {% for item in segments %}
+      {% set seg = item.seg %}
+      {% set failed = item.claims | selectattr("passed", "false") | list %}
+      <div class="segment {{ 'fail' if failed }}" id="seg-{{ seg.id }}">
+        <div class="row spread">
+          <span class="eyebrow">{{ loop.index }} · {{ seg.visual | replace("_", " ") }}</span>
+          {% if not job.busy and verification %}
+          <span class="row">
+            <button class="small ghost" type="button" onclick="document.getElementById('edit-{{ seg.id }}').classList.toggle('hidden')">Edit</button>
+            <form class="inline" method="post" action="/review/{{ job.id }}/regenerate"><input type="hidden" name="segment" value="{{ seg.id }}"><button class="small ghost" type="submit" title="Let the writer make a new, fact-checked version of this part">Regenerate</button></form>
+          </span>
+          {% endif %}
+        </div>
+        {% if seg.on_screen_text %}<div class="onscreen">{{ seg.on_screen_text }}</div>{% endif %}
+        <div class="narration">{{ seg.narration }}</div>
+
+        <form id="edit-{{ seg.id }}" class="hidden" method="post" action="/review/{{ job.id }}/edit">
+          <input type="hidden" name="segment" value="{{ seg.id }}">
+          <label for="narr-{{ seg.id }}">Narration</label>
+          <textarea id="narr-{{ seg.id }}" name="narration" rows="3">{{ seg.narration }}</textarea>
+          <label for="ost-{{ seg.id }}">On-screen text</label>
+          <input id="ost-{{ seg.id }}" type="text" name="on_screen_text" value="{{ seg.on_screen_text }}">
+          <p class="hint">Your text is fact-checked against the source. If it passes, the video is rendered again; scenes you did not change keep their voice and picture.</p>
+          <div class="actions" style="margin-top:.6rem"><button class="primary small" type="submit">Check and re-render</button></div>
+        </form>
+
+        {% for c in item.claims %}
+        <div class="claim">
+          {% if item.claims | length > 1 %}<div class="small">{{ c.text }}</div>{% endif %}
+          <blockquote>“{{ c.source_quote }}”</blockquote>
+          <div class="checks">
+            {% for r in c.checks %}
+            <span class="check {{ r.status }}" title="{{ r.reason }}{% if r.score is not none %} (score {{ '%.2f' | format(r.score) }}){% endif %}">{{ r.check }}</span>
+            {% endfor %}
+          </div>
+          {% for r in c.checks | selectattr("status", "equalto", "fail") %}<div class="small" style="color: var(--bad)">{{ r.check }}: {{ r.reason }}</div>{% endfor %}
+        </div>
+        {% endfor %}
+        {% for s in item.sentences %}
+        <div class="sentence {{ 'muted' if s.passed else 'bad' }}">
+          {% if s.kind == "filler" %}no fact, checked:{% else %}{{ s.kind }}:{% endif %} “{{ s.sentence }}”
+        </div>
+        {% endfor %}
       </div>
       {% endfor %}
     </div>
-    {% endfor %}
-  </div>
+
+    <div id="p-render" role="tabpanel" class="tab-panel">
+      <form class="card" method="post" action="/review/{{ job.id }}/rerender">
+        <h2>Render again</h2>
+        <p class="muted small" style="margin-top:0">Change the look or the voice. The script and its fact-checks stay as they are.</p>
+        <div class="grid two" style="gap:.2rem 1rem">
+          <div><label for="rr-theme">Theme</label>
+            <select id="rr-theme" name="theme">{% for t in themes %}<option {{ 'selected' if t == (idea.theme or cfg.render.theme) }}>{{ t }}</option>{% endfor %}</select></div>
+          <div><label for="rr-voice">Voice</label>
+            <select id="rr-voice" name="voice">{% for v in voices %}<option {{ 'selected' if v == (idea.voice or cfg.tts.voice) }}>{{ v }}</option>{% endfor %}</select></div>
+        </div>
+        <label class="check" style="margin-top:.8rem"><input type="checkbox" name="music" {{ 'checked' if music_default }}> Start with music</label>
+        <div class="actions"><button class="primary" type="submit" {{ 'disabled' if job.busy }}>Re-render</button></div>
+      </form>
+    </div>
+  </section>
 </div>
 
 <script>
+const TABS = ["claims", "post", "render"];
+function showTab(name, keep) {
+  if (!TABS.includes(name)) name = "{{ 'claims' if video and video.status == 'pending' else 'post' }}";
+  for (const t of TABS) {
+    document.getElementById("p-" + t).classList.toggle("hidden", t !== name);
+    document.getElementById("t-" + t).setAttribute("aria-selected", t === name);
+  }
+  if (!keep) history.replaceState(null, "", "#" + name);
+}
+showTab(location.hash.slice(1), true);
 function setMusic(on) {
   const v = document.getElementById("player");
   const src = on ? v.dataset.music : v.dataset.plain;
