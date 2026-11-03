@@ -105,9 +105,12 @@ def register(app: FastAPI, state: App) -> None:
     def home():
         return RedirectResponse("/create")
 
+    def create_ctx() -> dict[str, Any]:
+        return {**_choices(state), "inbox": IdeaStore(db).queued()}
+
     @app.get("/create", response_class=HTMLResponse)
     def create_page(request: Request, message: str = "", error: str = ""):
-        return state.render(request, "create.html", message=message, error=error, **_choices(state))
+        return state.render(request, "create.html", message=message, error=error, **create_ctx())
 
     @app.post("/create")
     def create(
@@ -137,10 +140,10 @@ def register(app: FastAPI, state: App) -> None:
                 settings["source_text"] = source_text.strip()
             items = parse_ideas_text(ideas, settings)
         except ValueError as exc:
-            return state.render(request, "create.html", error=str(exc), **_choices(state))
+            return state.render(request, "create.html", error=str(exc), **create_ctx())
         if not items:
             return state.render(
-                request, "create.html", error="Write at least one idea.", **_choices(state)
+                request, "create.html", error="Write at least one idea.", **create_ctx()
             )
         made, skipped = _make_or_queue(state, items, action)
         message = (
@@ -150,7 +153,7 @@ def register(app: FastAPI, state: App) -> None:
             message += " Skipped: " + " ".join(skipped)
         if action == "make" and made:
             return RedirectResponse("/jobs", status_code=303)
-        return state.render(request, "create.html", message=message, **_choices(state))
+        return state.render(request, "create.html", message=message, **create_ctx())
 
     @app.post("/ideas/generate", response_class=HTMLResponse)
     def ideas_generate(
@@ -223,15 +226,12 @@ def register(app: FastAPI, state: App) -> None:
 
     @app.get("/jobs", response_class=HTMLResponse)
     def jobs_page(request: Request):
-        store = IdeaStore(db)
         rejections = db.query("SELECT * FROM rejections ORDER BY created_at DESC LIMIT 30")
         return state.render(
             request,
             "jobs.html",
             jobs_html=jobs_partial(),
-            inbox=store.queued(),
             rejections=rejections,
-            topics=state.cfg.ideas.topics,
         )
 
     @app.get("/jobs/stream")
@@ -304,7 +304,7 @@ def register(app: FastAPI, state: App) -> None:
     @app.post("/inbox/{idea_id}/remove")
     def inbox_remove(request: Request, idea_id: int):
         IdeaStore(db).set_status(idea_id, "cancelled")
-        return _back("/jobs", request)
+        return _back("/create", request)
 
     @app.post("/batch")
     def batch(

@@ -126,9 +126,11 @@ def test_inbox_then_make(client: TestClient) -> None:
         "/create", data={"ideas": "How high is Mount Testa?", "action": "queue", "factcheck": "on"}
     )
     assert "1 idea(s) queued" in r.text
-    jobs_page = client.get("/jobs").text
-    assert "How high is Mount Testa?" in jobs_page
+    # The inbox lives on the Create page, right under the form that fills it.
+    assert "How high is Mount Testa?" in r.text.split('id="inbox"')[1]
+    assert 'id="inbox"' not in client.get("/jobs").text
     idea_id = client.state.db.query("SELECT id FROM ideas WHERE status = 'queued'")[0]["id"]
+    assert f"/inbox/{idea_id}/make" in client.get("/create").text
     r = client.post(f"/inbox/{idea_id}/make")
     assert r.status_code == 303
     assert len(client.get("/api/jobs").json()) == 1
@@ -143,7 +145,7 @@ def test_unchecked_factcheck_is_labeled(client: TestClient) -> None:
     client.post("/create", data={"ideas": "Why mountains are the best", "action": "queue"})
     idea = client.state.db.query("SELECT settings FROM ideas")[0]["settings"]
     assert json.loads(idea)["factcheck"] is False
-    assert "no fact-check" in client.get("/jobs").text
+    assert "no fact-check" in client.get("/create").text
 
 
 # --- edits --------------------------------------------------------------------------------

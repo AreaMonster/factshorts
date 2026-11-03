@@ -9,49 +9,7 @@
   {{ jobs_html | safe }}
 </div>
 
-<div class="grid two" style="align-items:start">
-  <div class="card">
-    <div class="card-head"><h2>Inbox</h2><span class="muted small">{{ inbox | length }} queued</span></div>
-    {% if inbox %}
-    <table>
-      <tbody>
-      {% for item in inbox %}
-        <tr>
-          <td>{{ item.idea.text }}
-            <div class="muted small">{{ item.idea.origin }}{% if item.article %} · Wikipedia: {{ item.article }}{% endif %}{% if not item.idea.factcheck %} · no fact-check{% endif %}</div>
-          </td>
-          <td style="white-space:nowrap; text-align:right">
-            <form class="inline" method="post" action="/inbox/{{ item.id }}/make"><button class="small" type="submit">Make</button></form>
-            <form class="inline" method="post" action="/inbox/{{ item.id }}/remove"><button class="small ghost danger" type="submit">Remove</button></form>
-          </td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="muted small">Empty. Use <b>Add to inbox</b> on the <a href="/create">Create</a> page to collect ideas for later.</p>
-    {% endif %}
-  </div>
-
-  <div class="card">
-    <h2>Batch run</h2>
-    <p class="muted small" style="margin-top:0">Makes every inbox idea first, then new suggested ideas for the ticked topics.</p>
-    <form method="post" action="/batch">
-      <div class="chips">
-        {% for t in topics %}
-        <label class="chip"><input type="checkbox" name="topics" value="{{ t }}"><span>{{ t }}</span></label>
-        {% endfor %}
-      </div>
-      <label for="per_topic">New ideas per topic (0 = inbox only)</label>
-      <div class="row">
-        <input id="per_topic" name="per_topic" type="number" min="0" max="10" value="{{ cfg.ideas.per_topic }}" style="max-width: 7rem">
-        <button type="submit">Start batch</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<details class="card" style="margin-top:1rem">
+<details class="card">
   <summary><h2>Rejected ideas <span class="muted small" style="font-weight:400">{{ rejections | length }}</span></h2></summary>
   {% if rejections %}
   <table>
